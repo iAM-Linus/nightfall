@@ -16,7 +16,11 @@ function Unit:initialize(params)
     self.y = params.y or 1
     self.grid = params.grid or nil
     
-    -- Stats
+    -- Add energy properties if not already present
+    self.energy = params.energy or 10
+    self.maxEnergy = params.maxEnergy or 10
+    
+    -- Initialize stats
     self.stats = {
         health = params.health or params.stats and params.stats.health or 10,
         maxHealth = params.maxHealth or params.stats and params.stats.maxHealth or 10,
@@ -24,10 +28,16 @@ function Unit:initialize(params)
         defense = params.defense or params.stats and params.stats.defense or 1,
         moveRange = params.moveRange or params.stats and params.stats.moveRange or 1,
         attackRange = params.attackRange or params.stats and params.stats.attackRange or 1,
-        energy = params.energy or params.stats and params.stats.energy or 10,
-        maxEnergy = params.maxEnergy or params.stats and params.stats.maxEnergy or 10,
+        energy = self.energy,  -- Add energy to stats
+        maxEnergy = self.maxEnergy,  -- Add maxEnergy to stats
         initiative = params.initiative or params.stats and params.stats.initiative or 5
     }
+    
+    -- Initialize ability cooldowns
+    self.abilityCooldowns = params.abilityCooldowns or {}
+    
+    -- Ensure abilities are initialized
+    self.abilities = params.abilities or {}
     
     -- Movement pattern
     self.movementPattern = params.movementPattern or "pawn"
@@ -163,6 +173,7 @@ function Unit:resetActionState()
     self.hasUsedAbility = false
     
     -- Reduce ability cooldowns
+    self.abilityCooldowns = self.abilityCooldowns or {}
     for abilityId, cooldown in pairs(self.abilityCooldowns) do
         if cooldown > 0 then
             self.abilityCooldowns[abilityId] = cooldown - 1
@@ -170,7 +181,14 @@ function Unit:resetActionState()
     end
     
     -- Regenerate some energy
-    self.stats.energy = math.min(self.stats.energy + 2, self.stats.maxEnergy)
+    self.energy = self.energy or 10
+    self.maxEnergy = self.maxEnergy or 10
+    self.energy = math.min(self.energy + 2, self.maxEnergy)
+    
+    -- Update energy stat
+    if self.stats then
+        self.stats.energy = self.energy
+    end
 end
 
 -- Take damage
@@ -442,113 +460,108 @@ end
 
 -- Use an ability
 function Unit:useAbility(abilityId, target, x, y)
-    -- Check if unit has this ability
-    local hasAbility = false
-    for _, id in ipairs(self.abilities) do
-        if id == abilityId then
-            hasAbility = true
-            break
+    if not abilityId then
+        print("Unit:useAbility - Warning: abilityId is nil")
+        return false
+    end
+    
+    -- Forward to game if available
+    if self.game then
+        if self.game.specialAbilitiesSystem then
+            -- Call specialAbilitiesSystem directly
+            local ability = self.game.specialAbilitiesSystem:getAbility(abilityId)
+            if not ability then
+                print("Warning: Ability " .. abilityId .. " not found")
+                return false
+            end
+            
+            return self.game.specialAbilitiesSystem:useAbility(self, abilityId, target, x, y)
+        else
+            print("Warning: specialAbilitiesSystem not available")
+            return false
         end
     end
     
-    if not hasAbility then
-        return false, "Unit does not have this ability"
-    end
-    
-    -- Check if ability is on cooldown
-    if (self.abilityCooldowns[abilityId] or 0) > 0 then
-        return false, "Ability is on cooldown"
-    end
-    
-    -- Check if unit has already used an ability this turn
-    if self.hasUsedAbility then
-        return false, "Unit has already used an ability this turn"
-    end
-    
-    -- Get ability definition from the special abilities system
-    local ability = nil
-    if self.grid and self.grid.game and self.grid.game.specialAbilitiesSystem then
-        ability = self.grid.game.specialAbilitiesSystem:getAbility(abilityId)
-    end
-    
-    if not ability then
-        return false, "Ability not found"
-    end
-    
-    -- Check energy cost
-    if ability.energyCost and self.stats.energy < ability.energyCost then
-        return false, "Not enough energy"
-    end
-    
-    -- Use the ability
-    local success = false
-    if ability.onUse then
-        success = ability.onUse(self, target, x, y)
-    end
-    
-    if success then
-        -- Use energy
-        if ability.energyCost then
-            self.stats.energy = self.stats.energy - ability.energyCost
-        end
-        
-        -- Set cooldown
-        if ability.cooldown then
-            self.abilityCooldowns[abilityId] = ability.cooldown
-        end
-        
-        -- Mark as having used an ability
-        self.hasUsedAbility = true
-    end
-    
-    return success
+    -- Fallback implementation if game reference is not available
+    print("No game reference - cannot use ability properly")
+    return false
 end
 
 -- Get ability cooldown
 function Unit:getAbilityCooldown(abilityId)
+    if not abilityId then
+        print("Unit:getAbilityCooldown - Warning: abilityId is nil")
+        return 0
+    end
+    
+    self.abilityCooldowns = self.abilityCooldowns or {}
     return self.abilityCooldowns[abilityId] or 0
+end
+
+-- Set ability cooldown
+function Unit:setAbilityCooldown(abilityId, cooldown)
+    if not abilityId then
+        print("Unit:setAbilityCooldown - Warning: abilityId is nil")
+        return
+    end
+    
+    self.abilityCooldowns = self.abilityCooldowns or {}
+    self.abilityCooldowns[abilityId] = cooldown or 0
 end
 
 -- Check if unit can use an ability
 function Unit:canUseAbility(abilityId)
-    -- Check if unit has this ability
-    local hasAbility = false
-    for _, id in ipairs(self.abilities) do
-        if id == abilityId then
-            hasAbility = true
-            break
-        end
-    end
+    -- Initialize properties if they don't exist
+    self.energy = self.energy or 0
+    self.maxEnergy = self.maxEnergy or 0
+    self.abilityCooldowns = self.abilityCooldowns or {}
     
-    if not hasAbility then
-        return false
-    end
+    -- Ensure stats table exists
+    self.stats = self.stats or {}
+    self.stats.energy = self.energy
+    self.stats.maxEnergy = self.maxEnergy
     
-    -- Check if ability is on cooldown
-    if (self.abilityCooldowns[abilityId] or 0) > 0 then
-        return false
-    end
-    
-    -- Check if unit has already used an ability this turn
-    if self.hasUsedAbility then
-        return false
-    end
-    
-    -- Get ability definition from the special abilities system
+    -- Get ability definition
     local ability = nil
-    if self.grid and self.grid.game and self.grid.game.specialAbilitiesSystem then
-        ability = self.grid.game.specialAbilitiesSystem:getAbility(abilityId)
+    if self.game and self.game.specialAbilitiesSystem then
+        ability = self.game.specialAbilitiesSystem:getAbility(abilityId)
     end
     
     if not ability then
+        print("Unit:canUseAbility - Ability not found: " .. abilityId)
         return false
     end
     
-    -- Check energy cost
-    if ability.energyCost and self.stats.energy < ability.energyCost then
+    -- Set default values for ability properties to avoid nil errors
+    local cooldown = self:getAbilityCooldown(abilityId) or 0
+    local energyCost = ability.energyCost or 0
+    local energy = self.energy or 0
+    
+    ---- Debug output
+    --print("Unit:canUseAbility - Checking " .. abilityId .. ":")
+    --print("  - Energy: " .. energy .. "/" .. energyCost)
+    --print("  - Cooldown: " .. cooldown .. "/" .. (ability.cooldown or 0))
+    --print("  - Has used ability: " .. tostring(self.hasUsedAbility or false))
+    
+    -- Check if on cooldown
+    if cooldown > 0 then
+        --print("Unit:canUseAbility - On cooldown: " .. cooldown .. " turns remaining")
         return false
     end
     
+    -- Check if enough energy
+    if energy < energyCost then
+        print("Unit:canUseAbility - Not enough energy: " .. energy .. "/" .. energyCost)
+        return false
+    end
+    
+    -- Check if already used ability this turn
+    if self.hasUsedAbility then
+        --print("Unit:canUseAbility - Already used an ability this turn")
+        return false
+    end
+    
+    --print("Unit:canUseAbility - Can use ability: " .. abilityId)
     return true
 end
 
@@ -580,6 +593,26 @@ function Unit:clone()
     })
     
     return clone
+end
+
+-- Debug abilities function for a Unit
+function Unit:debugAbilities()
+    print("\n=== UNIT ABILITY DEBUG ===")
+    print("Unit type: " .. (self.unitType or "unknown"))
+    print("Energy: " .. (self.energy or 0) .. "/" .. (self.maxEnergy or 0))
+    
+    if not self.abilities or #self.abilities == 0 then
+        print("No abilities")
+    else
+        print("Abilities:")
+        for i, abilityId in ipairs(self.abilities) do
+            print("  " .. i .. ". " .. abilityId)
+            print("     Cooldown: " .. self:getAbilityCooldown(abilityId))
+            print("     Can use: " .. tostring(self:canUseAbility(abilityId)))
+        end
+    end
+    
+    print("=== END UNIT DEBUG ===\n")
 end
 
 return Unit

@@ -8,16 +8,29 @@ local HUD = class("HUD")
 
 function HUD:initialize(game)
     self.game = game
-    
+
+    -- Create ability panel
+    self.abilityPanel = require("src.ui.ability_panel"):new(game)
+
     -- HUD elements
     self.elements = {}
-    
+
     -- Animation timers
     self.animations = {}
     
     -- HUD state
     self.visible = true
     self.alpha = 1
+
+    -- Create the ability panel
+    self.abilityPanel = require("src.ui.ability_panel"):new(game)
+
+    -- Position ability panel at the bottom of( the scren
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+    self.abilityPanel:setPosition((screenWidth - self.abilityPanel.width) / 2, screenHeight - self.abilityPanel.height - 40)
+
+    self.abilityPanel.game = game
     
     -- Initialize HUD elements
     self:initElements()
@@ -465,6 +478,9 @@ function HUD:update(dt)
             element:update(dt)
         end
     end
+
+    -- Update ability panel
+    self.abilityPanel:update(dt)
 end
 
 -- Draw HUD
@@ -477,6 +493,9 @@ function HUD:draw()
             element:draw()
         end
     end
+
+    -- Draw ability panel
+    self.abilityPanel:draw()
 end
 
 -- Show notification
@@ -504,6 +523,9 @@ end
 -- Set selected unit
 function HUD:setSelectedUnit(unit)
     self.elements.unitInfo:setUnit(unit)
+
+    -- Update ability panel with the unit
+    self.abilityPanel:setUnit(unit)
 end
 
 -- Set target unit
@@ -524,6 +546,37 @@ end
 -- Set current level
 function HUD:setLevel(level)
     self.elements.levelIndicator.level = level
+end
+
+function HUD:mousemoved(x, y)
+    -- Forward to ability panel
+    self.abilityPanel:mousemoved(x, y)
+end
+
+function HUD:mousepressed(x, y, button)
+    -- Try to handle with ability panel first
+    local handled = self.abilityPanel:mousepressed(x, y, button)
+    
+    -- Return whether it was handled
+    return handled
+end
+
+function HUD:keypressed(key)
+    -- Try to handle with ability panel
+    local handled = self.abilityPanel:keypressed(key)
+    
+    -- Return whether it was handled
+    return handled
+end
+
+-- Get the currently selected ability
+function HUD:getSelectedAbility()
+    return self.abilityPanel:getSelectedAbility()
+end
+
+-- Use the currently selected ability
+function HUD:useSelectedAbility(target, x, y)
+    return self.abilityPanel:useSelectedAbility(target, x, y)
 end
 
 -- Show HUD
@@ -548,6 +601,9 @@ function HUD:resize(width, height)
     self.elements.helpText.width = width - 20
     self.elements.notification.x = width / 2 - 150
     self.elements.miniMap.x = width - 110
+
+    -- Update ability panel position
+    self.abilityPanel:setPosition((width - self.abilityPanel.width) / 2, height - self.abilityPanel.height - 40)
 end
 
 return HUD

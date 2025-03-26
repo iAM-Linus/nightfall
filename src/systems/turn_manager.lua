@@ -151,6 +151,12 @@ function TurnManager:calculateInitiativeOrder()
     -- Store initiative order
     self.initiativeOrder = units
     self.currentInitiativeIndex = 1
+
+    -- DEBUGGING: Print the calculated initiative order
+    print("Initiative order calculated:")
+    for i, unit in ipairs(self.initiativeOrder) do
+        print(i .. ": " .. unit.unitType .. " (faction: " .. unit.faction .. ")")
+    end
 end
 
 -- Start a new turn
@@ -170,6 +176,10 @@ function TurnManager:startTurn()
     -- Reset unit action state
     if currentUnit.resetActionState then
         currentUnit:resetActionState()
+    else
+        currentUnit.hasMoved = false
+        currentUnit.hasAttacked = false
+        currentUnit.hasUsedAbility = false
     end
     
     -- Reset action points if it's a player turn
@@ -363,9 +373,9 @@ function TurnManager:useActionPoints(amount)
         end
         
         -- Auto-end turn if out of action points
-        if self.currentActionPoints <= 0 and self:isPlayerTurn() then
-            timer.after(0.5, function() self:endTurn() end)
-        end
+        --if self.currentActionPoints <= 0 and self:isPlayerTurn() then
+        --    timer.after(0.5, function() self:endTurn() end)
+        --end
         
         return true
     end

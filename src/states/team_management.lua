@@ -87,7 +87,7 @@ function TeamManagement:initializeStore()
             defense = 6,
             speed = 7
         },
-        abilities = {"Charge", "Feint"}
+        abilities = {"Knight's Charge", "Feint"}
     })
     
     table.insert(availableUnits, {
@@ -115,7 +115,7 @@ function TeamManagement:initializeStore()
             defense = 5,
             speed = 6
         },
-        abilities = {"Heal", "Barrier"}
+        abilities = {"Healing Light", "Mystic Barrier"}
     })
     
     table.insert(availableUnits, {
@@ -129,7 +129,7 @@ function TeamManagement:initializeStore()
             defense = 4,
             speed = 4
         },
-        abilities = {"Advance", "Bash"}
+        abilities = {"Advance", "Shield Bash"}
     })
     
     table.insert(availableUnits, {

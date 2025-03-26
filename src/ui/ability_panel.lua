@@ -1,4 +1,4 @@
--- Ability Panel UI for Nightfall Chess
+-- src/ui/ability_panel.lua
 -- Displays and manages unit abilities
 
 local class = require("lib.middleclass.middleclass")
@@ -31,6 +31,8 @@ function AbilityPanel:initialize(game)
     self.visible = false
     self.alpha = 0
     self.targetAlpha = 0
+    
+    print("AbilityPanel initialized, game reference: " .. tostring(game ~= nil))
 end
 
 -- Set panel position
@@ -41,33 +43,64 @@ end
 
 -- Set current unit
 function AbilityPanel:setUnit(unit)
+    -- Debug info
+    if unit then
+        print("AbilityPanel: Setting unit " .. unit.unitType)
+        if unit.abilities then
+            print("Unit has " .. #unit.abilities .. " abilities")
+        else
+            print("Unit has no abilities array!")
+        end
+    else
+        print("AbilityPanel: Clearing unit")
+        self:hide()
+        self.unit = nil
+        self.slots = {}
+        return
+    end
+
     self.unit = unit
     self:updateAbilitySlots()
     
     -- Show panel if unit has abilities
-    if unit and #unit.abilities > 0 then
+    if unit and unit.abilities and #unit.abilities > 0 then
         self:show()
     else
         self:hide()
     end
 end
 
--- Update ability slots based on current unit
 function AbilityPanel:updateAbilitySlots()
     self.slots = {}
     
-    if not self.unit then return end
+    if not self.unit then 
+        print("AbilityPanel: No unit to update slots for")
+        return 
+    end
     
+    if not self.unit.abilities then
+        print("AbilityPanel: Unit has no abilities array")
+        return
+    end
+    
+    -- Get proper system reference
+    local specialAbilitiesSystem = nil
+    if self.game and self.game.specialAbilitiesSystem then
+        specialAbilitiesSystem = self.game.specialAbilitiesSystem
+    else
+        print("AbilityPanel: No specialAbilitiesSystem available")
+        return
+    end
+
     -- Create slots for each ability
     for i, abilityId in ipairs(self.unit.abilities) do
-        local ability = nil
+        print("AbilityPanel: Processing ability: " .. abilityId)
         
-        -- Get ability definition from special abilities system
-        if self.game.specialAbilitiesSystem then
-            ability = self.game.specialAbilitiesSystem:getAbility(abilityId)
-        end
+        local ability = specialAbilitiesSystem:getAbility(abilityId)
         
         if ability then
+            print("AbilityPanel: Found ability: " .. ability.name)
+            
             table.insert(self.slots, {
                 id = abilityId,
                 name = ability.name,
@@ -78,8 +111,23 @@ function AbilityPanel:updateAbilitySlots()
                 currentCooldown = self.unit:getAbilityCooldown(abilityId),
                 canUse = self.unit:canUseAbility(abilityId)
             })
+        else
+            print("AbilityPanel: Ability not found: " .. abilityId)
+            -- Create a placeholder slot for missing abilities
+            table.insert(self.slots, {
+                id = abilityId,
+                name = "Unknown Ability",
+                description = "This ability could not be found in the system.",
+                icon = nil,
+                energyCost = 0,
+                cooldown = 0,
+                currentCooldown = 0,
+                canUse = false
+            })
         end
     end
+    
+    print("AbilityPanel: Created " .. #self.slots .. " ability slots")
 end
 
 -- Show the panel
@@ -106,17 +154,19 @@ function AbilityPanel:update(dt)
     end
     
     -- Update ability slots
-    if self.unit then
+    if self.unit and self.unit.getAbilityCooldown and self.unit.canUseAbility then
         for i, slot in ipairs(self.slots) do
-            slot.currentCooldown = self.unit:getAbilityCooldown(slot.id)
-            slot.canUse = self.unit:canUseAbility(slot.id)
+            if slot and slot.id then
+                slot.currentCooldown = self.unit:getAbilityCooldown(slot.id)
+                slot.canUse = self.unit:canUseAbility(slot.id)
+            end
         end
     end
 end
 
 -- Draw the panel
 function AbilityPanel:draw()
-    if not self.visible then return end
+    if not self.visible or self.alpha <= 0 then return end
     
     local slotSize = 64
     local padding = 10
@@ -131,13 +181,21 @@ function AbilityPanel:draw()
     
     -- Draw title
     love.graphics.setColor(1, 1, 1, self.alpha)
-    love.graphics.setFont(self.game.assets.fonts.medium)
+    if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.medium then
+        love.graphics.setFont(self.game.assets.fonts.medium)
+    end
     love.graphics.print("Abilities", self.x + padding, self.y + padding)
     
     -- Draw ability slots
     for i, slot in ipairs(self.slots) do
         local slotX = self.x + padding + (i-1) * (slotSize + spacing)
         local slotY = self.y + padding + 30
+        
+        -- Make sure slot doesn't go off panel width
+        if slotX + slotSize > self.x + self.width - padding then
+            -- Skip drawing if too many slots
+            goto continue
+        end
         
         -- Draw slot background
         if slot.canUse then
@@ -157,7 +215,8 @@ function AbilityPanel:draw()
         
         -- Draw ability icon or placeholder
         love.graphics.setColor(1, 1, 1, self.alpha)
-        if slot.icon then
+        if slot.icon and type(slot.icon) == "userdata" and slot.icon.getWidth then
+            -- Only draw the icon if it's a valid image
             love.graphics.draw(slot.icon, slotX + 4, slotY + 4, 0, (slotSize-8)/slot.icon:getWidth(), (slotSize-8)/slot.icon:getHeight())
         else
             -- Draw placeholder icon
@@ -166,32 +225,49 @@ function AbilityPanel:draw()
             
             -- Draw ability initial
             love.graphics.setColor(1, 1, 1, self.alpha)
-            love.graphics.setFont(self.game.assets.fonts.medium)
-            love.graphics.printf(slot.name:sub(1, 1), slotX, slotY + slotSize/2 - 10, slotSize, "center")
+            if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.medium then
+                love.graphics.setFont(self.game.assets.fonts.medium)
+            end
+            
+            if slot.name and type(slot.name) == "string" and #slot.name > 0 then
+                love.graphics.printf(slot.name:sub(1, 1), slotX, slotY + slotSize/2 - 10, slotSize, "center")
+            else
+                love.graphics.printf("?", slotX, slotY + slotSize/2 - 10, slotSize, "center")
+            end
         end
         
         -- Draw cooldown overlay
-        if slot.currentCooldown > 0 then
+        if slot.currentCooldown and slot.currentCooldown > 0 then
             love.graphics.setColor(0, 0, 0, 0.7 * self.alpha)
             love.graphics.rectangle("fill", slotX, slotY, slotSize, slotSize, 4, 4)
             
             love.graphics.setColor(1, 1, 1, self.alpha)
-            love.graphics.setFont(self.game.assets.fonts.medium)
+            if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.medium then
+                love.graphics.setFont(self.game.assets.fonts.medium)
+            end
             love.graphics.printf(tostring(slot.currentCooldown), slotX, slotY + slotSize/2 - 10, slotSize, "center")
         end
         
         -- Draw energy cost
         love.graphics.setColor(0.2, 0.6, 0.9, self.alpha)
-        love.graphics.setFont(self.game.assets.fonts.small)
-        love.graphics.print(tostring(slot.energyCost), slotX + 4, slotY + slotSize - 18)
+        if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.small then
+            love.graphics.setFont(self.game.assets.fonts.small)
+        end
+        if slot.energyCost then
+            love.graphics.print(tostring(slot.energyCost), slotX + 4, slotY + slotSize - 18)
+        end
         
         -- Draw key binding
         love.graphics.setColor(1, 1, 1, 0.7 * self.alpha)
         love.graphics.rectangle("fill", slotX + slotSize - 18, slotY + 4, 14, 14)
         
         love.graphics.setColor(0, 0, 0, self.alpha)
-        love.graphics.setFont(self.game.assets.fonts.small)
+        if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.small then
+            love.graphics.setFont(self.game.assets.fonts.small)
+        end
         love.graphics.printf(tostring(i), slotX + slotSize - 18, slotY + 5, 14, "center")
+        
+        ::continue::
     end
     
     -- Draw tooltip
@@ -229,19 +305,25 @@ function AbilityPanel:drawTooltip()
     
     -- Draw ability name
     love.graphics.setColor(1, 1, 1, self.alpha)
-    love.graphics.setFont(self.game.assets.fonts.medium)
+    if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.medium then
+        love.graphics.setFont(self.game.assets.fonts.medium)
+    end
     love.graphics.print(ability.name, x + padding, y + padding)
     
     -- Draw ability description
     love.graphics.setColor(0.9, 0.9, 0.9, 0.9 * self.alpha)
-    love.graphics.setFont(self.game.assets.fonts.small)
+    if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.small then
+        love.graphics.setFont(self.game.assets.fonts.small)
+    end
     love.graphics.printf(ability.description, x + padding, y + padding + 25, width - padding * 2, "left")
     
     -- Draw ability stats
     love.graphics.setColor(0.7, 0.7, 0.9, self.alpha)
-    love.graphics.setFont(self.game.assets.fonts.small)
-    love.graphics.print("Energy: " .. ability.energyCost, x + padding, y + height - 40)
-    love.graphics.print("Cooldown: " .. ability.cooldown, x + padding, y + height - 25)
+    if self.game and self.game.assets and self.game.assets.fonts and self.game.assets.fonts.small then
+        love.graphics.setFont(self.game.assets.fonts.small)
+    end
+    love.graphics.print("Energy: " .. (ability.energyCost or 0), x + padding, y + height - 40)
+    love.graphics.print("Cooldown: " .. (ability.cooldown or 0), x + padding, y + height - 25)
 end
 
 -- Handle mouse movement
@@ -289,8 +371,10 @@ function AbilityPanel:mousepressed(x, y, button)
             -- Select this ability
             if self.selectedSlot == i then
                 self.selectedSlot = nil
+                print("AbilityPanel: Deselected ability")
             else
                 self.selectedSlot = i
+                print("AbilityPanel: Selected ability: " .. slot.name)
             end
             
             return true
@@ -312,23 +396,30 @@ end
 -- Use the selected ability
 function AbilityPanel:useSelectedAbility(target, x, y)
     if not self.unit or not self.selectedSlot then
+        print("AbilityPanel: Cannot use ability - no unit or no selected slot")
         return false
     end
     
     local ability = self.slots[self.selectedSlot]
     if not ability then
+        print("AbilityPanel: Cannot use ability - no ability found in selected slot")
         return false
     end
+    
+    print("AbilityPanel: Trying to use ability: " .. ability.name)
     
     -- Use the ability
     local success = self.unit:useAbility(ability.id, target, x, y)
     
     if success then
+        print("AbilityPanel: Successfully used ability")
         -- Reset selection
         self.selectedSlot = nil
         
         -- Update slots
         self:updateAbilitySlots()
+    else
+        print("AbilityPanel: Failed to use ability")
     end
     
     return success
@@ -344,14 +435,26 @@ function AbilityPanel:keypressed(key)
         -- Select this ability
         if self.selectedSlot == num then
             self.selectedSlot = nil
+            print("AbilityPanel: Deselected ability via key")
         else
             self.selectedSlot = num
+            local ability = self.slots[num]
+            if ability then
+                print("AbilityPanel: Selected ability via key: " .. ability.name)
+            end
         end
         
         return true
     end
     
     return false
+end
+
+-- Resize method to handle window size changes
+function AbilityPanel:resize(width, height)
+    -- Update position to stay centered at bottom
+    self.x = (width - self.width) / 2
+    self.y = height - self.height - 40
 end
 
 return AbilityPanel

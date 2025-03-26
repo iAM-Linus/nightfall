@@ -48,17 +48,23 @@ function Game:enter(previous, game)
     game.grid = grid
     
     -- Initialize game systems
+    specialAbilitiesSystem = SpecialAbilitiesSystem:new(game)
     turnManager = TurnManager:new(game)
     combatSystem = CombatSystem:new(game)
-    specialAbilitiesSystem = SpecialAbilitiesSystem:new(game)
     
     -- Connect systems to grid
     turnManager:setGrid(grid)
     
     -- Store systems in game object for access by other components
+    self.specialAbilitiesSystem = specialAbilitiesSystem
     self.turnManager = turnManager
     self.combatSystem = combatSystem
-    self.specialAbilitiesSystem = specialAbilitiesSystem
+    
+
+    -- Store references in game object for access by other components
+    game.specialAbilitiesSystem = specialAbilitiesSystem
+    game.turnManager = turnManager
+    game.combatSystem = combatSystem
     
     -- Create player units
     self:createPlayerUnits()
@@ -77,24 +83,6 @@ function Game:enter(previous, game)
     -- Update visibility
     grid:updateVisibility()
     
-    -- Register units with turn manager
-    for _, unit in ipairs(playerUnits) do
-        unit.faction = "player"
-    end
-    
-    for _, unit in ipairs(enemyUnits) do
-        unit.faction = "enemy"
-    end
-    
-    -- Initialize turn manager with all units
-    local allUnits = {}
-    for _, unit in ipairs(playerUnits) do
-        table.insert(allUnits, unit)
-    end
-    for _, unit in ipairs(enemyUnits) do
-        table.insert(allUnits, unit)
-    end
-    
     -- Set up turn manager callbacks
     turnManager.onTurnStart = function(unit)
         self:handleTurnStart(unit)
@@ -104,14 +92,21 @@ function Game:enter(previous, game)
         self:handleTurnEnd(unit)
     end
     
-    turnManager.onPhaseChange = function(newPhase)
-        self:handlePhaseChange(newPhase)
+    turnManager.onRoundStart = function(roundNumber)
+        self:handleRoundStart(roundNumber)
     end
     
-    turnManager.onActionPointsChanged = function(oldValue, newValue)
-        self:handleActionPointsChanged(oldValue, newValue)
+    turnManager.onRoundEnd = function(roundNumber)
+        self:handleRoundEnd(roundNumber)
     end
     
+    turnManager.onActionPointsChanged = function(current, max)
+        self:handleActionPointsChanged(current, max)
+    end
+    
+    -- DEBUGGING Check abilities
+    --self:debugAbilities()
+
     -- Start the game
     turnManager:startGame()
 end
@@ -144,6 +139,11 @@ function Game:update(dt)
     
     for _, unit in ipairs(enemyUnits) do
         unit:update(dt)
+    end
+
+    -- Update HUD
+    if self.hud then
+        self.hud:update(dt)
     end
     
     -- Update camera (smooth follow if there's a selected unit)
@@ -302,59 +302,46 @@ end
 
 -- Draw UI elements
 function Game:drawUI(width, height)
-    -- Draw turn indicator
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setFont(self.game.assets.fonts.medium)
-    
-    if turnManager:isPlayerTurn() then
-        love.graphics.printf("Player Turn", 0, 20, width, "center")
-    else
-        love.graphics.printf("Enemy Turn", 0, 20, width, "center")
+    if self.hud then
+        self.hud:draw()
     end
-    
-    -- Draw action points
-    love.graphics.printf("Action Points: " .. turnManager.currentActionPoints, 0, 50, width, "center")
-    
-    -- Draw selected unit info
-    if selectedUnit then
-        love.graphics.setColor(0.2, 0.2, 0.3, 0.8)
-        love.graphics.rectangle("fill", 10, height - 100, 200, 90)
-        
-        love.graphics.setColor(0.8, 0.8, 0.8, 1)
-        love.graphics.rectangle("line", 10, height - 100, 200, 90)
-        
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.setFont(self.game.assets.fonts.medium)
-        love.graphics.print(selectedUnit.unitType:upper(), 20, height - 90)
-        
-        love.graphics.setFont(self.game.assets.fonts.small)
-        love.graphics.print("HP: " .. selectedUnit.stats.health .. "/" .. selectedUnit.stats.maxHealth, 20, height - 70)
-        love.graphics.print("ATK: " .. selectedUnit.stats.attack, 20, height - 55)
-        love.graphics.print("DEF: " .. selectedUnit.stats.defense, 20, height - 40)
-        love.graphics.print("Move: " .. selectedUnit.stats.moveRange, 20, height - 25)
-    end
-    
-    -- Draw level indicator
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setFont(self.game.assets.fonts.small)
-    love.graphics.print("Level: " .. currentLevel, width - 100, 20)
-    
-    -- Draw help text
-    love.graphics.setColor(0.8, 0.8, 0.8, 0.8)
-    love.graphics.setFont(self.game.assets.fonts.small)
-    love.graphics.print("WASD/Arrows: Move | Space: Select | Esc: Menu", 200, height - 25)
 end
 
 -- Initialize UI elements
 function Game:initUI()
     -- Create UI elements here
+    -- Create HUD
+    local HUD = require("src.ui.hud")
+    self.hud = HUD:new(self.game)
+    
+    -- Store HUD in game object for access by other components
+    self.game.ui = self.hud
+    
+    -- Set up HUD with initial game state
+    self.hud:setPlayerTurn(turnManager:isPlayerTurn())
+    self.hud:setActionPoints(turnManager.currentActionPoints, turnManager.maxActionPoints)
+    self.hud:setLevel(currentLevel)
+    
+    -- Set grid for mini-map
+    self.hud:setGrid(grid)
+    
+    -- Set help text
+    self.hud:setHelpText("WASD/Arrows: Move | Space: Select | E/Enter: End Turn | Esc: Menu")
+    
+    -- Show notification at game start
+    self.hud:showNotification("Game Started - Round 1", 3)
     uiElements = {
         -- Add UI elements as needed
     }
+    
+    -- Set up UI to display turn manager info
+    if self.game and self.game.ui then
+        self.game.ui:setPlayerTurn(turnManager:isPlayerTurn())
+        self.game.ui:setActionPoints(turnManager.currentActionPoints, turnManager.maxActionPoints)
+    end
 end
 
 -- Create player units
-
 function Game:createPlayerUnits()
     -- Clear existing units
     playerUnits = {}
@@ -391,6 +378,25 @@ function Game:createPlayerUnits()
             elseif unitData.type == "queen" then
                 movementPattern = "queen"
             end
+
+            -- Standardize abilities
+            local abilities = {}
+            if unitData.abilities and #unitData.abilities > 0 then
+                abilities = unitData.abilities
+            else
+                -- Default abilities based on unit type
+                if unitData.type == "queen" then
+                    abilities = {"fireball", "heal", "teleport"}
+                elseif unitData.type == "bishop" then
+                    abilities = {"heal", "healing_light"}
+                elseif unitData.type == "knight" then
+                    abilities = {"knights_charge", "feint"}
+                elseif unitData.type == "rook" then
+                    abilities = {"fireball", "shield"}
+                elseif unitData.type == "pawn" then
+                    abilities = {"strengthen"}
+                end
+            end
             
             -- Create unit with data from team management
             local unit = Unit:new({
@@ -406,8 +412,47 @@ function Game:createPlayerUnits()
                 movementPattern = movementPattern,
                 x = startX,
                 y = startY,
-                abilities = unitData.abilities or {}
+                abilities = abilities,
+                energy = unitData.stats.energy or 10,
+                maxEnergy = unitData.stats.energy or 10,
+                -- Ability cooldown table
+                abilityCooldowns = {}
             })
+
+            -- Set game reference for ability usage
+            unit.game = self.game
+            
+            -- Add methods for ability management if not already in Unit class
+            if not unit.getAbilityCooldown then
+                unit.getAbilityCooldown = function(self, abilityId)
+                    return self.abilityCooldowns[abilityId] or 0
+                end
+            end
+            
+            if not unit.canUseAbility then
+                unit.canUseAbility = function(self, abilityId)
+                    local ability = self.game.specialAbilitiesSystem:getAbility(abilityId)
+                    if not ability then return false end
+                    
+                    -- Check cooldown
+                    if self:getAbilityCooldown(abilityId) > 0 then
+                        return false
+                    end
+                    
+                    -- Check energy
+                    if self.energy < (ability.energyCost or 0) then
+                        return false
+                    end
+                    
+                    return true
+                end
+            end
+            
+            if not unit.useAbility then
+                unit.useAbility = function(self, abilityId, target, x, y)
+                    return self.game:useAbility(self, abilityId, target, x, y)
+                end
+            end
             
             -- Add unit to grid and player units list
             grid:placeEntity(unit, startX, startY)
@@ -510,13 +555,30 @@ function Game:createEnemyUnits()
     end
 end
 
+-- Handle round start event
+function Game:handleRoundStart(roundNumber)
+    print("Round " .. roundNumber .. " started")
+    -- Update visibility
+    grid:updateVisibility()
+
+    -- Show notification
+    if self.hud then
+        self.hud:showNotification("Round " .. roundNumber .. " Started", 2)
+    end
+end
+
+-- Handle round end event
+function Game:handleRoundEnd(roundNumber)
+    print("Round " .. roundNumber .. " ended")
+
+    -- Show notification
+    if self.hud then
+        self.hud:showNotification("Round " .. roundNumber .. " Ended", 2)
+    end
+end
+
 -- Handle turn start event
 function Game:handleTurnStart(unit)
-    -- Reset unit action states
-    unit.hasMoved = false
-    unit.hasAttacked = false
-    unit.hasUsedAbility = false
-    
     -- Update visibility
     grid:updateVisibility()
     
@@ -524,12 +586,21 @@ function Game:handleTurnStart(unit)
     if unit.faction == "player" then
         self:selectUnit(unit)
         print("Player unit turn started: " .. unit.unitType)
+        -- Show notification
+        if self.hud then
+            self.hud:showNotification("Player Turn: " .. unit.unitType:upper(), 2)
+        end
     else
         print("Enemy unit turn started: " .. unit.unitType)
-        -- Process enemy AI after a short delay
-        timer.after(0.5, function() 
-            self:processEnemyUnit(unit) 
-        end)
+        -- Show notification
+        if self.hud then
+            self.hud:showNotification("Enemy Turn: " .. unit.unitType:upper(), 2)
+        end
+    end
+
+    -- Update HUD player turn indicator
+    if self.hud then
+        self.hud:setPlayerTurn(unit.faction == "player")
     end
 end
 
@@ -539,116 +610,24 @@ function Game:handleTurnEnd(unit)
     if unit.faction == "player" and selectedUnit == unit then
         selectedUnit = nil
         validMoves = {}
+
+        -- Update HUD tp clear selected unit
+        if self.hud then
+            self.hud:setSelectedUnit(nil)
+        end
     end
     
     print("Turn ended for: " .. unit.unitType)
 end
 
--- Handle phase change event
-function Game:handlePhaseChange(newPhase)
-    print("Phase changed to: " .. newPhase)
-    
-    -- Update UI based on phase
-    if newPhase == "player" then
-        -- Player phase started
-    elseif newPhase == "enemy" then
-        -- Enemy phase started
-    end
-end
-
 -- Handle action points changed event
-function Game:handleActionPointsChanged(oldValue, newValue)
+function Game:handleActionPointsChanged(current, max)
     -- Update UI to show new action points
-    print("Action points changed from " .. oldValue .. " to " .. newValue)
-end
-
--- Process enemy unit turn
-function Game:processEnemyUnit(unit)
-    -- Simple AI for enemy units
-    local targetUnit = self:findClosestPlayerUnit(unit)
+    print("Action points changed to " .. current .. "/" .. max)
     
-    if targetUnit then
-        -- Try to attack if in range
-        if self:canAttack(unit, targetUnit) then
-            self:attackUnit(unit, targetUnit)
-        else
-            -- Move towards target
-            local movePos = self:findBestMoveTowardsTarget(unit, targetUnit)
-            if movePos then
-                self:moveEnemyUnit(unit, movePos.x, movePos.y)
-                
-                -- Try to attack after moving
-                if self:canAttack(unit, targetUnit) then
-                    timer.after(0.3, function()
-                        self:attackUnit(unit, targetUnit)
-                    end)
-                end
-            end
-        end
+    if self.game and self.hud then
+        self.hud:setActionPoints(current, max)
     end
-    
-    -- End turn after a delay
-    timer.after(0.8, function()
-        turnManager:endTurn()
-    end)
-end
-
--- Find closest player unit
-function Game:findClosestPlayerUnit(enemyUnit)
-    local closestUnit = nil
-    local closestDistance = math.huge
-    
-    for _, unit in ipairs(playerUnits) do
-        local distance = math.abs(unit.x - enemyUnit.x) + math.abs(unit.y - enemyUnit.y)
-        if distance < closestDistance then
-            closestDistance = distance
-            closestUnit = unit
-        end
-    end
-    
-    return closestUnit
-end
-
--- Find best move position towards target
-function Game:findBestMoveTowardsTarget(unit, target)
-    local possibleMoves = ChessMovement:getValidMoves(unit, grid)
-    if #possibleMoves == 0 then
-        return nil
-    end
-    
-    local bestMove = nil
-    local bestDistance = math.huge
-    
-    for _, move in ipairs(possibleMoves) do
-        local distance = math.abs(move.x - target.x) + math.abs(move.y - target.y)
-        if distance < bestDistance then
-            bestDistance = distance
-            bestMove = move
-        end
-    end
-    
-    return bestMove
-end
-
--- Move enemy unit
-function Game:moveEnemyUnit(unit, x, y)
-    -- Remove from current position
-    grid:removeEntity(unit.x, unit.y)
-    
-    -- Update position
-    unit.x = x
-    unit.y = y
-    
-    -- Place at new position
-    grid:placeEntity(unit, x, y)
-    
-    -- Mark as moved
-    unit.hasMoved = true
-    
-    -- Use action points
-    turnManager:useActionPoints(1)
-    
-    print("Enemy " .. unit.unitType .. " moved to " .. x .. "," .. y)
 end
 
 -- Select a unit
@@ -669,6 +648,11 @@ function Game:selectUnit(unit)
     validMoves = ChessMovement.getValidMoves(unit.movementPattern, unit.x, unit.y, grid, unit, unit.moveRange)
     
     print("Selected " .. unit.unitType)
+    
+    -- Update UI
+    if self.game and self.hud then
+        self.hud:setSelectedUnit(unit)
+    end
 end
 
 -- Move the selected unit
@@ -699,14 +683,14 @@ function Game:moveSelectedUnit(x, y)
     end
     
     -- Check if there's enough action points
-    if turnManager.currentActionPoints < 1 then
+    if not turnManager:useActionPoints(1) then
         print("Not enough action points")
         return false
     end
     
-    if grid:getEntityAt(x, y) ~= nil then
+    if grid:getEntityAt(selectedUnit.x, selectedUnit.y) ~= nil then
         -- Remove from current position
-        grid:removeEntity(selectedUnit.x, selectedUnit.y)
+        grid:removeEntity(selectedUnit)
     end
     
     -- Update position
@@ -718,9 +702,6 @@ function Game:moveSelectedUnit(x, y)
     
     -- Mark as moved
     selectedUnit.hasMoved = true
-    
-    -- Use action points
-    turnManager:useActionPoints(1)
     
     -- Recalculate valid moves
     validMoves = ChessMovement:getValidMoves(selectedUnit, grid)
@@ -758,14 +739,25 @@ function Game:attackUnit(attacker, defender)
     end
     
     -- Check if there's enough action points (for player units)
-    if attacker.faction == "player" and turnManager.currentActionPoints < 1 then
+    if attacker.faction == "player" and not turnManager:useActionPoints(1) then
         print("Not enough action points")
         return false
     end
     
     -- Process attack using combat system
     combatSystem:processAttack(attacker, defender)
+    
+    -- Mark as attacked
+    attacker.hasAttacked = true
 
+    -- Show combat notification
+    if self.hud then
+        --self.hud:showNotification(attacker.unitType:upper() .. " dealt " .. damage .. " damage!", 1.5)
+        
+        -- Show target unit in enemy info panel
+        self.hud:setTargetUnit(defender)
+    end
+    
     -- Check for defeat
     if defender.stats.health <= 0 then
         self:defeatUnit(defender)
@@ -795,23 +787,90 @@ function Game:defeatUnit(unit)
             end
         end
     end
+
+    -- Show defeat notification
+    if self.hud then
+        self.hud:showNotification(unit.unitType:upper() .. " was defeated!", 2)
+        
+        -- Clear enemy info if defeated unit was targeted
+        if self.hud.elements.enemyInfo.unit == unit then
+            self.hud:setTargetUnit(nil)
+        end
+    end
     
     print(unit.unitType .. " was defeated")
 end
 
--- Check for game over conditions
-function Game:checkGameOver()
-    -- Check if all player units are defeated
-    if #playerUnits == 0 then
-        print("Game over - Player defeated")
-        gamestate.switch(require("src.states.gameover"), self.game, false)
+-- Use unit ability
+function Game:useAbility(unit, abilityId, target, x, y)
+    if not specialAbilitiesSystem then
+        print("Warning: specialAbilitiesSystem not initialized")
+        return false
     end
     
-    -- Check if all enemy units are defeated
-    if #enemyUnits == 0 then
-        print("Game over - Player victorious")
-        gamestate.switch(require("src.states.gameover"), self.game, true)
+    -- Get ability definition
+    local ability = specialAbilitiesSystem:getAbility(abilityId)
+    if not ability then
+        print("Warning: Ability " .. abilityId .. " not found")
+        return false
     end
+    
+    -- Check if there's enough action points
+    if not turnManager:useActionPoints(ability.actionPointCost or 1) then
+        print("Not enough action points")
+        if self.hud then
+            self.hud:showNotification("Not enough action points!", 1.5)
+        end
+        return false
+    end
+    
+    -- Use the ability
+    local success = specialAbilitiesSystem:useAbility(unit, abilityId, target, x, y)
+    
+    if success then
+        -- Mark unit as having used an ability
+        unit.hasUsedAbility = true
+        
+        -- Show notification
+        if self.hud then
+            self.hud:showNotification(unit.unitType:upper() .. " used " .. ability.name, 2)
+        end
+        
+        -- Update visibility
+        grid:updateVisibility()
+    end
+    
+    return success
+end
+
+-- Check for game over conditions
+function Game:checkGameOver()
+    -- Let turn manager check for game over first
+    if turnManager:checkGameOver() then
+        -- Show game over notification before switching states
+        if self.hud then
+            if turnManager.winner == "player" then
+                self.hud:showNotification("Victory! You have won!", 3)
+            else
+                self.hud:showNotification("Defeat! Game over...", 3)
+            end
+        end
+        
+        -- Delay game state transition to allow notification to be seen
+        timer.after(3, function()
+            if turnManager.winner == "player" then
+                print("Game over - Player victorious")
+                gamestate.switch(require("src.states.gameover"), self.game, true)
+            else
+                print("Game over - Player defeated")
+                gamestate.switch(require("src.states.gameover"), self.game, false)
+            end
+        end)
+        
+        return true
+    end
+    
+    return false
 end
 
 -- Handle key presses
@@ -824,6 +883,11 @@ function Game:keypressed(key)
     -- Only handle gameplay keys during player turn
     if not turnManager:isPlayerTurn() then
         return
+    end
+
+    -- Check if HUD handled the key press
+    if self.hud and self.hud:keypressed(key) then
+        return -- HUD consumed the key press
     end
     
     -- Movement keys
@@ -852,9 +916,19 @@ function Game:keypressed(key)
     -- Selection and action keys
     if key == "space" then
         if selectedUnit then
-            -- Deselect if already selected
-            selectedUnit = nil
-            validMoves = {}
+            -- If an ability is selected, use it on the unit's current position
+            if self.hud and self.hud:getSelectedAbility() then
+                self.hud:useSelectedAbility(nil, selectedUnit.x, selectedUnit.y)
+            else
+                -- Deselect if already selected
+                selectedUnit = nil
+                validMoves = {}
+
+                if self.hud then
+                    self.hud:setSelectedUnit(nil)
+
+                end
+            end
         else
             -- Try to select a unit at cursor position
             -- (This would be implemented with cursor position tracking)
@@ -870,8 +944,16 @@ function Game:keypressed(key)
     if key == "1" or key == "2" or key == "3" then
         if selectedUnit then
             local abilityIndex = tonumber(key)
-            -- Use ability (would be implemented with special abilities system)
+            specialAbilitiesSystem:useAbility(selectedUnit, abilityIndex)
         end
+    end
+end
+
+-- Handle mouse movement
+function Game:mousemoved(x, y)
+    -- Forward mouse movement to HUD for ability tooltips
+    if self.hud then
+        self.hud:mousemoved(x, y)
     end
 end
 
@@ -881,7 +963,12 @@ function Game:mousepressed(x, y, button)
     if not turnManager or not turnManager:isPlayerTurn() then
         return
     end
-    
+
+    -- Check if HUD handled the input (e.g., ability panel click)
+    if self.hud and self.hud:mousepressed(x, y, button) then
+        return -- HUD consumed the click
+    end
+
     -- Safety check for gameCamera
     if not gameCamera then
         print("Warning: gameCamera not initialized in mousepressed")
@@ -902,6 +989,30 @@ function Game:mousepressed(x, y, button)
     -- Check if coordinates are within grid bounds
     if not grid:isInBounds(gridX, gridY) then
         return
+    end
+
+    -- If an ability is selected, try to use it on the clicked target
+    if self.hud and selectedUnit then
+        local selectedAbility = self.hud:getSelectedAbility()
+        if selectedAbility then
+            local targetEntity = grid:getEntityAt(gridX, gridY)
+
+            -- Attempt to use the ability
+            if self.hud:useSelectedAbility(targetEntity, gridX, gridY) then
+                -- Update visibility after ability use
+                grid:updateVisibility()
+
+                -- Recalculate valid moves
+                if selectedUnit then
+                    validMoves = ChessMovement:getValidMoves(selectedUnit.x, selectedUnit.y, grid, selectedUnit, selectedUnit.stats.moveRange)
+                end
+
+                -- Show notification
+                self.hud:showNotification("Used " .. selectedAbility.name, 1.5)
+                return
+
+            end
+        end
     end
     
     -- Left click
@@ -936,10 +1047,84 @@ function Game:mousepressed(x, y, button)
     
     -- Right click
     if button == 2 then
+        -- Deselect ability if one is selected
+        if self.hud and self.hud:getSelectedAbility() then
+            -- Reset ability selection
+            self.hud.abilityPanel.selectedSlot = nil
+            return
+        end
+
         -- Deselect unit
         selectedUnit = nil
         validMoves = {}
+
+        -- Update HUD to clear selected unit
+        if self.hud then
+            self.hud:setSelectedUnit(nil)
+        end
     end
+end
+
+-- Handle resize event
+function Game:resize(w, h)
+    -- Update HUD element positions
+    if self.hud then
+        self.hud:resize(w, h)
+    end
+end
+
+function Game:debugAbilities()
+    print("\n=== DEBUGGING ABILITIES ===")
+    
+    -- Check if special abilities system is initialized
+    if not specialAbilitiesSystem then
+        print("ERROR: specialAbilitiesSystem not initialized")
+        return
+    end
+    
+    -- List all available abilities
+    print("\nAvailable abilities in specialAbilitiesSystem:")
+    local count = 0
+    for id, ability in pairs(specialAbilitiesSystem.abilities) do
+        count = count + 1
+        print(count .. ". " .. id .. " -> " .. (ability.name or "NO NAME"))
+    end
+    
+    -- Check player units' abilities
+    print("\nPlayer Units' Abilities:")
+    for i, unit in ipairs(playerUnits) do
+        print("Unit " .. i .. " (" .. unit.unitType .. "):")
+        
+        if not unit.abilities or #unit.abilities == 0 then
+            print("  - No abilities")
+        else
+            for j, abilityId in ipairs(unit.abilities) do
+                local ability = specialAbilitiesSystem:getAbility(abilityId)
+                if ability then
+                    print("  " .. j .. ". " .. abilityId .. " -> " .. ability.name)
+                    print("     Cooldown: " .. unit:getAbilityCooldown(abilityId) .. "/" .. (ability.cooldown or 0))
+                    print("     Can use: " .. tostring(unit:canUseAbility(abilityId)))
+                else
+                    print("  " .. j .. ". " .. abilityId .. " -> NOT FOUND IN SYSTEM")
+                end
+            end
+        end
+    end
+    
+    -- Check UI connections
+    print("\nUI Connections:")
+    print("HUD exists: " .. tostring(self.hud ~= nil))
+    if self.hud then
+        print("HUD has ability panel: " .. tostring(self.hud.abilityPanel ~= nil))
+        if self.hud.abilityPanel then
+            print("Ability panel game reference: " .. tostring(self.hud.abilityPanel.game ~= nil))
+            if self.hud.abilityPanel.game then
+                print("Game has specialAbilitiesSystem: " .. tostring(self.hud.abilityPanel.game.specialAbilitiesSystem ~= nil))
+            end
+        end
+    end
+    
+    print("=== END DEBUGGING ===\n")
 end
 
 return Game

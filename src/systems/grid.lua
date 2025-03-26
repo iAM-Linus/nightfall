@@ -85,6 +85,12 @@ function Grid:setTileType(x, y, tileType, walkable)
     end
 end
 
+function Grid:getTileType(x, y)
+    if self:isInBounds(x, y) then
+        return self.tiles[y][x].type
+    end
+end
+
 function Grid:isVisible(x, y)
      return self:getTile(x, y).visible
 end
@@ -167,6 +173,10 @@ end
 function Grid:isWalkable(x, y)
     local tile = self:getTile(x, y)
     return tile and tile.walkable and not tile.entity
+end
+
+function Grid:isValidPosition(x, y)
+    return self:isWalkable(x, y)
 end
 
 -- Get all walkable neighbors of a tile

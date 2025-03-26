@@ -195,8 +195,8 @@ end
 -- Handle option selection
 function Menu:selectOption(action)
     if action == "newGame" then
-        -- Start a new game
-        gamestate.switch(require("src.states.game"), self.game)
+        -- Go to team management screen before starting a new game
+        gamestate.switch(require("src.states.team_management"), self.game)
     elseif action == "continue" then
         -- Load saved game (not implemented yet)
         -- For now, just start a new game

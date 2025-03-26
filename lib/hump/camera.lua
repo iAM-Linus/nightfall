@@ -166,6 +166,10 @@ function camera:worldCoords(x,y, ox,oy,w,h)
 	return x+self.x, y+self.y
 end
 
+function camera:toWorld(x,  y)
+	return self:worldCoords(x, y)
+end
+
 function camera:mousePosition(ox,oy,w,h)
 	local mx,my = love.mouse.getPosition()
 	return self:worldCoords(mx,my, ox,oy,w,h)

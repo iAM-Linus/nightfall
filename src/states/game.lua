@@ -7,6 +7,9 @@ local camera = require("lib.hump.camera")
 local Grid = require("src.systems.grid")
 local Unit = require("src.entities.unit")
 local ChessMovement = require("src.systems.chess_movement")
+local TurnManager = require("src.systems.turn_manager")
+local CombatSystem = require("src.systems.combat_system")
+local SpecialAbilitiesSystem = require("src.systems.special_abilities_system")
 
 local Game = {}
 
@@ -17,10 +20,13 @@ local enemyUnits = {}
 local selectedUnit = nil
 local validMoves = {}
 local currentLevel = 1
-local playerTurn = true
-local actionPoints = 3
 local gameCamera = nil
 local uiElements = {}
+
+-- Game systems
+local turnManager = nil
+local combatSystem = nil
+local specialAbilitiesSystem = nil
 
 -- Initialize the game state
 function Game:init()
@@ -37,6 +43,23 @@ function Game:enter(previous, game)
     -- Initialize grid
     grid = Grid:new(10, 10, game.config.tileSize)
     
+    -- Store grid in game object immediately to ensure it's available
+    self.grid = grid
+    game.grid = grid
+    
+    -- Initialize game systems
+    turnManager = TurnManager:new(game)
+    combatSystem = CombatSystem:new(game)
+    specialAbilitiesSystem = SpecialAbilitiesSystem:new(game)
+    
+    -- Connect systems to grid
+    turnManager:setGrid(grid)
+    
+    -- Store systems in game object for access by other components
+    self.turnManager = turnManager
+    self.combatSystem = combatSystem
+    self.specialAbilitiesSystem = specialAbilitiesSystem
+    
     -- Create player units
     self:createPlayerUnits()
     
@@ -48,16 +71,49 @@ function Game:enter(previous, game)
     
     -- Set up game state
     currentLevel = 1
-    playerTurn = true
-    actionPoints = 3
     selectedUnit = nil
     validMoves = {}
     
     -- Update visibility
     grid:updateVisibility()
     
-    -- Start turn
-    self:startPlayerTurn()
+    -- Register units with turn manager
+    for _, unit in ipairs(playerUnits) do
+        unit.faction = "player"
+    end
+    
+    for _, unit in ipairs(enemyUnits) do
+        unit.faction = "enemy"
+    end
+    
+    -- Initialize turn manager with all units
+    local allUnits = {}
+    for _, unit in ipairs(playerUnits) do
+        table.insert(allUnits, unit)
+    end
+    for _, unit in ipairs(enemyUnits) do
+        table.insert(allUnits, unit)
+    end
+    
+    -- Set up turn manager callbacks
+    turnManager.onTurnStart = function(unit)
+        self:handleTurnStart(unit)
+    end
+    
+    turnManager.onTurnEnd = function(unit)
+        self:handleTurnEnd(unit)
+    end
+    
+    turnManager.onPhaseChange = function(newPhase)
+        self:handlePhaseChange(newPhase)
+    end
+    
+    turnManager.onActionPointsChanged = function(oldValue, newValue)
+        self:handleActionPointsChanged(oldValue, newValue)
+    end
+    
+    -- Start the game
+    turnManager:startGame()
 end
 
 -- Leave the game state
@@ -68,12 +124,18 @@ function Game:leave()
     validMoves = {}
     selectedUnit = nil
     grid = nil
+    turnManager = nil
+    combatSystem = nil
+    specialAbilitiesSystem = nil
 end
 
 -- Update game logic
 function Game:update(dt)
     -- Update timers
     timer.update(dt)
+    
+    -- Update turn manager
+    turnManager:update(dt)
     
     -- Update units
     for _, unit in ipairs(playerUnits) do
@@ -85,6 +147,17 @@ function Game:update(dt)
     end
     
     -- Update camera (smooth follow if there's a selected unit)
+    -- Safety check for camera and grid
+    if not gameCamera then
+        print("Warning: gameCamera not initialized in update")
+        return
+    end
+    
+    if not grid then
+        print("Warning: grid not initialized in update")
+        return
+    end
+    
     if selectedUnit then
         local targetX, targetY = grid:gridToScreen(selectedUnit.x, selectedUnit.y)
         targetX = targetX + grid.tileSize / 2
@@ -97,12 +170,7 @@ function Game:update(dt)
         gameCamera:lookAt(newX, newY)
     end
     
-    -- Check for end of turn
-    if playerTurn and actionPoints <= 0 then
-        self:endPlayerTurn()
-    end
-    
-    -- Check for end of game conditions
+    -- Check for game over conditions
     self:checkGameOver()
 end
 
@@ -110,8 +178,21 @@ end
 function Game:draw()
     local width, height = love.graphics.getDimensions()
     
+    -- Safety check for gameCamera
+    if not gameCamera then
+        print("Warning: gameCamera not initialized in draw")
+        return
+    end
+    
     -- Apply camera transformations
     gameCamera:attach()
+    
+    -- Safety check for grid
+    if not grid then
+        print("Warning: grid not initialized in draw")
+        gameCamera:detach()
+        return
+    end
     
     -- Draw grid
     self:drawGrid()
@@ -198,7 +279,7 @@ end
 
 -- Draw movement highlights
 function Game:drawMovementHighlights()
-    if selectedUnit and playerTurn then
+    if selectedUnit and turnManager:isPlayerTurn() then
         love.graphics.setColor(0.2, 0.8, 0.2, 0.3)
         
         for _, move in ipairs(validMoves) do
@@ -225,14 +306,14 @@ function Game:drawUI(width, height)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.setFont(self.game.assets.fonts.medium)
     
-    if playerTurn then
+    if turnManager:isPlayerTurn() then
         love.graphics.printf("Player Turn", 0, 20, width, "center")
     else
         love.graphics.printf("Enemy Turn", 0, 20, width, "center")
     end
     
     -- Draw action points
-    love.graphics.printf("Action Points: " .. actionPoints, 0, 50, width, "center")
+    love.graphics.printf("Action Points: " .. turnManager.currentActionPoints, 0, 50, width, "center")
     
     -- Draw selected unit info
     if selectedUnit then
@@ -261,7 +342,7 @@ function Game:drawUI(width, height)
     -- Draw help text
     love.graphics.setColor(0.8, 0.8, 0.8, 0.8)
     love.graphics.setFont(self.game.assets.fonts.small)
-    love.graphics.print("WASD/Arrows: Move | Space: Select | Esc: Menu", 10, height - 25)
+    love.graphics.print("WASD/Arrows: Move | Space: Select | Esc: Menu", 200, height - 25)
 end
 
 -- Initialize UI elements
@@ -273,66 +354,87 @@ function Game:initUI()
 end
 
 -- Create player units
+
 function Game:createPlayerUnits()
     -- Clear existing units
     playerUnits = {}
     
-    -- Create knight
-    local knight = Unit:new({
-        unitType = "knight",
-        faction = "player",
-        isPlayerControlled = true,
-        health = 15,
-        maxHealth = 15,
-        attack = 4,
-        defense = 2,
-        moveRange = 2,
-        attackRange = 1,
-        movementPattern = "knight",
-        x = 2,
-        y = 5
-    })
-    
-    -- Create rook
-    local rook = Unit:new({
-        unitType = "rook",
-        faction = "player",
-        isPlayerControlled = true,
-        health = 20,
-        maxHealth = 20,
-        attack = 5,
-        defense = 3,
-        moveRange = 3,
-        attackRange = 2,
-        movementPattern = "orthogonal",
-        x = 1,
-        y = 3
-    })
-    
-    -- Create bishop
-    local bishop = Unit:new({
-        unitType = "bishop",
-        faction = "player",
-        isPlayerControlled = true,
-        health = 12,
-        maxHealth = 12,
-        attack = 3,
-        defense = 1,
-        moveRange = 3,
-        attackRange = 2,
-        movementPattern = "diagonal",
-        x = 1,
-        y = 7
-    })
-    
-    -- Add units to grid and player units list
-    grid:placeEntity(knight, knight.x, knight.y)
-    grid:placeEntity(rook, rook.x, rook.y)
-    grid:placeEntity(bishop, bishop.x, bishop.y)
-    
-    table.insert(playerUnits, knight)
-    table.insert(playerUnits, rook)
-    table.insert(playerUnits, bishop)
+    -- Check if units were selected in team management
+    if self.game.playerUnits and #self.game.playerUnits > 0 then
+        -- Use units selected in team management
+        for i, unitData in ipairs(self.game.playerUnits) do
+            -- Determine starting position based on index
+            local startX, startY
+            if i == 1 then
+                startX, startY = 2, 5
+            elseif i == 2 then
+                startX, startY = 1, 3
+            elseif i == 3 then
+                startX, startY = 1, 7
+            elseif i == 4 then
+                startX, startY = 3, 5
+            else
+                -- Additional units get placed in remaining positions
+                startX, startY = math.min(3, i-3), 3 + ((i-1) % 5)
+            end
+            
+            -- Map unit type to movement pattern
+            local movementPattern = "orthogonal"
+            if unitData.type == "knight" then
+                movementPattern = "knight"
+            elseif unitData.type == "rook" then
+                movementPattern = "orthogonal"
+            elseif unitData.type == "bishop" then
+                movementPattern = "diagonal"
+            elseif unitData.type == "pawn" then
+                movementPattern = "pawn"
+            elseif unitData.type == "queen" then
+                movementPattern = "queen"
+            end
+            
+            -- Create unit with data from team management
+            local unit = Unit:new({
+                unitType = unitData.type,
+                faction = "player",
+                isPlayerControlled = true,
+                health = unitData.stats.health or 15,
+                maxHealth = unitData.stats.health or 15,
+                attack = unitData.stats.attack or 4,
+                defense = unitData.stats.defense or 2,
+                moveRange = unitData.stats.speed and math.max(1, math.floor(unitData.stats.speed / 2)) or 2,
+                attackRange = 1,
+                movementPattern = movementPattern,
+                x = startX,
+                y = startY,
+                abilities = unitData.abilities or {}
+            })
+            
+            -- Add unit to grid and player units list
+            grid:placeEntity(unit, startX, startY)
+            table.insert(playerUnits, unit)
+            
+            -- Apply items if available
+            if unitData.items then
+                for _, item in ipairs(unitData.items) do
+                    -- Apply item effects to unit stats
+                    if item.stats then
+                        for stat, value in pairs(item.stats) do
+                            if stat == "health" or stat == "maxHealth" then
+                                unit.health = unit.health + value
+                                unit.maxHealth = unit.maxHealth + value
+                            elseif stat == "attack" then
+                                unit.attack = unit.attack + value
+                            elseif stat == "defense" then
+                                unit.defense = unit.defense + value
+                            elseif stat == "speed" then
+                                unit.moveRange = unit.moveRange + math.max(0, math.floor(value / 2))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
     
     -- Set grid reference for each unit
     for _, unit in ipairs(playerUnits) do
@@ -350,16 +452,15 @@ function Game:createEnemyUnits()
         unitType = "pawn",
         faction = "enemy",
         isPlayerControlled = false,
-        health = 8,
-        maxHealth = 8,
+        health = 10,
+        maxHealth = 10,
         attack = 2,
         defense = 1,
         moveRange = 1,
         attackRange = 1,
-        movementPattern = "orthogonal",
-        behavior = "aggressive",
+        movementPattern = "pawn",
         x = 8,
-        y = 4
+        y = 3
     })
     
     -- Create another pawn
@@ -367,19 +468,18 @@ function Game:createEnemyUnits()
         unitType = "pawn",
         faction = "enemy",
         isPlayerControlled = false,
-        health = 8,
-        maxHealth = 8,
+        health = 10,
+        maxHealth = 10,
         attack = 2,
         defense = 1,
         moveRange = 1,
         attackRange = 1,
-        movementPattern = "orthogonal",
-        behavior = "aggressive",
+        movementPattern = "pawn",
         x = 8,
-        y = 6
+        y = 7
     })
     
-    -- Create enemy knight
+    -- Create knight
     local knight = Unit:new({
         unitType = "knight",
         faction = "enemy",
@@ -391,7 +491,6 @@ function Game:createEnemyUnits()
         moveRange = 2,
         attackRange = 1,
         movementPattern = "knight",
-        behavior = "aggressive",
         x = 9,
         y = 5
     })
@@ -411,157 +510,181 @@ function Game:createEnemyUnits()
     end
 end
 
--- Start player turn
-function Game:startPlayerTurn()
-    playerTurn = true
-    actionPoints = 3
-    
+-- Handle turn start event
+function Game:handleTurnStart(unit)
     -- Reset unit action states
-    for _, unit in ipairs(playerUnits) do
-        unit.hasMoved = false
-        unit.hasAttacked = false
-        unit.hasUsedAbility = false
-    end
+    unit.hasMoved = false
+    unit.hasAttacked = false
+    unit.hasUsedAbility = false
     
     -- Update visibility
     grid:updateVisibility()
     
-    -- Show turn start message
-    print("Player turn started")
-end
-
--- End player turn
-function Game:endPlayerTurn()
-    playerTurn = false
-    
-    -- Start enemy turn
-    self:startEnemyTurn()
-end
-
--- Start enemy turn
-function Game:startEnemyTurn()
-    -- Reset enemy unit action states
-    for _, unit in ipairs(enemyUnits) do
-        unit.hasMoved = false
-        unit.hasAttacked = false
-        unit.hasUsedAbility = false
-    end
-    
-    -- Show turn start message
-    print("Enemy turn started")
-    
-    -- Process enemy AI
-    timer.after(0.5, function() self:processEnemyTurn() end)
-end
-
--- Process enemy turn
-function Game:processEnemyTurn()
-    -- Simple AI for enemy units
-    for i, unit in ipairs(enemyUnits) do
-        -- Wait a bit between each enemy unit's actions
-        timer.after(i * 0.8, function()
-            self:processEnemyUnit(unit)
+    -- If it's a player unit, select it
+    if unit.faction == "player" then
+        self:selectUnit(unit)
+        print("Player unit turn started: " .. unit.unitType)
+    else
+        print("Enemy unit turn started: " .. unit.unitType)
+        -- Process enemy AI after a short delay
+        timer.after(0.5, function() 
+            self:processEnemyUnit(unit) 
         end)
     end
-    
-    -- End enemy turn after all units have acted
-    timer.after(#enemyUnits * 0.8 + 0.5, function()
-        self:endEnemyTurn()
-    end)
 end
 
--- Process individual enemy unit
-function Game:processEnemyUnit(unit)
-    -- Simple AI: Find closest player unit and move toward it
-    local closestUnit = nil
-    local closestDistance = math.huge
-    
-    for _, playerUnit in ipairs(playerUnits) do
-        local distance = math.abs(playerUnit.x - unit.x) + math.abs(playerUnit.y - unit.y)
-        
-        if distance < closestDistance then
-            closestUnit = playerUnit
-            closestDistance = distance
-        end
+-- Handle turn end event
+function Game:handleTurnEnd(unit)
+    -- Deselect unit if it's a player unit
+    if unit.faction == "player" and selectedUnit == unit then
+        selectedUnit = nil
+        validMoves = {}
     end
     
-    if closestUnit then
+    print("Turn ended for: " .. unit.unitType)
+end
+
+-- Handle phase change event
+function Game:handlePhaseChange(newPhase)
+    print("Phase changed to: " .. newPhase)
+    
+    -- Update UI based on phase
+    if newPhase == "player" then
+        -- Player phase started
+    elseif newPhase == "enemy" then
+        -- Enemy phase started
+    end
+end
+
+-- Handle action points changed event
+function Game:handleActionPointsChanged(oldValue, newValue)
+    -- Update UI to show new action points
+    print("Action points changed from " .. oldValue .. " to " .. newValue)
+end
+
+-- Process enemy unit turn
+function Game:processEnemyUnit(unit)
+    -- Simple AI for enemy units
+    local targetUnit = self:findClosestPlayerUnit(unit)
+    
+    if targetUnit then
         -- Try to attack if in range
-        local attackTargets = ChessMovement.getAttackTargets(
-            unit.movementPattern, 
-            unit.x, 
-            unit.y, 
-            grid, 
-            unit, 
-            unit.stats.attackRange
-        )
-        
-        local canAttack = false
-        for _, target in ipairs(attackTargets) do
-            if target.entity and target.entity.faction == "player" then
-                -- Attack player unit
-                self:attackUnit(unit, target.entity)
-                canAttack = true
-                break
-            end
-        end
-        
-        -- If couldn't attack, try to move toward player
-        if not canAttack then
-            local path = grid:findPath(unit.x, unit.y, closestUnit.x, closestUnit.y)
-            
-            if path and #path > 1 then
-                -- Move along path (second node, as first is current position)
-                local moveTarget = path[2]
-                grid:moveEntity(unit, moveTarget.x, moveTarget.y)
+        if self:canAttack(unit, targetUnit) then
+            self:attackUnit(unit, targetUnit)
+        else
+            -- Move towards target
+            local movePos = self:findBestMoveTowardsTarget(unit, targetUnit)
+            if movePos then
+                self:moveEnemyUnit(unit, movePos.x, movePos.y)
                 
-                -- Try to attack again after moving
-                attackTargets = ChessMovement.getAttackTargets(
-                    unit.movementPattern, 
-                    unit.x, 
-                    unit.y, 
-                    grid, 
-                    unit, 
-                    unit.stats.attackRange
-                )
-                
-                for _, target in ipairs(attackTargets) do
-                    if target.entity and target.entity.faction == "player" then
-                        -- Attack player unit
-                        self:attackUnit(unit, target.entity)
-                        break
-                    end
+                -- Try to attack after moving
+                if self:canAttack(unit, targetUnit) then
+                    timer.after(0.3, function()
+                        self:attackUnit(unit, targetUnit)
+                    end)
                 end
             end
         end
     end
+    
+    -- End turn after a delay
+    timer.after(0.8, function()
+        turnManager:endTurn()
+    end)
 end
 
--- End enemy turn
-function Game:endEnemyTurn()
-    -- Start player turn
-    self:startPlayerTurn()
+-- Find closest player unit
+function Game:findClosestPlayerUnit(enemyUnit)
+    local closestUnit = nil
+    local closestDistance = math.huge
+    
+    for _, unit in ipairs(playerUnits) do
+        local distance = math.abs(unit.x - enemyUnit.x) + math.abs(unit.y - enemyUnit.y)
+        if distance < closestDistance then
+            closestDistance = distance
+            closestUnit = unit
+        end
+    end
+    
+    return closestUnit
+end
+
+-- Find best move position towards target
+function Game:findBestMoveTowardsTarget(unit, target)
+    local possibleMoves = ChessMovement:getValidMoves(unit, grid)
+    if #possibleMoves == 0 then
+        return nil
+    end
+    
+    local bestMove = nil
+    local bestDistance = math.huge
+    
+    for _, move in ipairs(possibleMoves) do
+        local distance = math.abs(move.x - target.x) + math.abs(move.y - target.y)
+        if distance < bestDistance then
+            bestDistance = distance
+            bestMove = move
+        end
+    end
+    
+    return bestMove
+end
+
+-- Move enemy unit
+function Game:moveEnemyUnit(unit, x, y)
+    -- Remove from current position
+    grid:removeEntity(unit.x, unit.y)
+    
+    -- Update position
+    unit.x = x
+    unit.y = y
+    
+    -- Place at new position
+    grid:placeEntity(unit, x, y)
+    
+    -- Mark as moved
+    unit.hasMoved = true
+    
+    -- Use action points
+    turnManager:useActionPoints(1)
+    
+    print("Enemy " .. unit.unitType .. " moved to " .. x .. "," .. y)
 end
 
 -- Select a unit
 function Game:selectUnit(unit)
+    -- Can only select units during player turn
+    if not turnManager:isPlayerTurn() then
+        return
+    end
+    
+    -- Can only select player units
+    if unit.faction ~= "player" then
+        return
+    end
+    
     selectedUnit = unit
     
     -- Calculate valid moves
-    if unit and playerTurn then
-        validMoves = unit:getValidMovePositions()
-    else
-        validMoves = {}
-    end
+    validMoves = ChessMovement.getValidMoves(unit.movementPattern, unit.x, unit.y, grid, unit, unit.moveRange)
+    
+    print("Selected " .. unit.unitType)
 end
 
--- Move selected unit
+-- Move the selected unit
 function Game:moveSelectedUnit(x, y)
-    if not selectedUnit or not playerTurn then
+    -- Check if there's a selected unit and it's the player's turn
+    if not selectedUnit or not turnManager:isPlayerTurn() then
         return false
     end
     
-    -- Check if move is valid
+    -- Check if the unit has already moved
+    if selectedUnit.hasMoved then
+        print("Unit has already moved this turn")
+        return false
+    end
+    
+    -- Check if the move is valid
     local isValidMove = false
     for _, move in ipairs(validMoves) do
         if move.x == x and move.y == y then
@@ -571,55 +694,81 @@ function Game:moveSelectedUnit(x, y)
     end
     
     if not isValidMove then
+        print("Invalid move")
         return false
     end
     
-    -- Move the unit
-    local success = grid:moveEntity(selectedUnit, x, y)
-    
-    if success then
-        -- Mark unit as moved
-        selectedUnit.hasMoved = true
-        
-        -- Consume action point
-        actionPoints = actionPoints - 1
-        
-        -- Update valid moves
-        validMoves = selectedUnit:getValidMovePositions()
-        
-        -- Update visibility
-        grid:updateVisibility()
-        
-        return true
+    -- Check if there's enough action points
+    if turnManager.currentActionPoints < 1 then
+        print("Not enough action points")
+        return false
     end
     
-    return false
+    if grid:getEntityAt(x, y) ~= nil then
+        -- Remove from current position
+        grid:removeEntity(selectedUnit.x, selectedUnit.y)
+    end
+    
+    -- Update position
+    selectedUnit.x = x
+    selectedUnit.y = y
+    
+    -- Place at new position
+    grid:placeEntity(selectedUnit, x, y)
+    
+    -- Mark as moved
+    selectedUnit.hasMoved = true
+    
+    -- Use action points
+    turnManager:useActionPoints(1)
+    
+    -- Recalculate valid moves
+    validMoves = ChessMovement:getValidMoves(selectedUnit, grid)
+    
+    -- Update visibility
+    grid:updateVisibility()
+    
+    print("Moved " .. selectedUnit.unitType .. " to " .. x .. "," .. y)
+    
+    return true
+end
+
+-- Check if a unit can attack another unit
+function Game:canAttack(attacker, defender)
+    -- Check if units are on different teams
+    if attacker.faction == defender.faction then
+        return false
+    end
+    
+    -- Check if attacker has already attacked
+    if attacker.hasAttacked then
+        return false
+    end
+    
+    -- Check if defender is in attack range
+    local distance = math.abs(attacker.x - defender.x) + math.abs(attacker.y - defender.y)
+    return distance <= attacker.stats.attackRange
 end
 
 -- Attack a unit
 function Game:attackUnit(attacker, defender)
-    -- Calculate damage
-    local damage = math.max(1, attacker.stats.attack - defender.stats.defense)
-    
-    -- Apply damage
-    defender.stats.health = math.max(0, defender.stats.health - damage)
-    
-    -- Mark attacker as having attacked
-    attacker.hasAttacked = true
-    
-    -- Consume action point if it's player's turn
-    if playerTurn then
-        actionPoints = actionPoints - 1
+    -- Check if attack is valid
+    if not self:canAttack(attacker, defender) then
+        return false
     end
     
-    -- Check if defender is defeated
+    -- Check if there's enough action points (for player units)
+    if attacker.faction == "player" and turnManager.currentActionPoints < 1 then
+        print("Not enough action points")
+        return false
+    end
+    
+    -- Process attack using combat system
+    combatSystem:processAttack(attacker, defender)
+
+    -- Check for defeat
     if defender.stats.health <= 0 then
         self:defeatUnit(defender)
-    end
-    
-    -- Update valid moves if attacker is selected unit
-    if attacker == selectedUnit then
-        validMoves = attacker:getValidMovePositions()
     end
     
     return true
@@ -647,99 +796,149 @@ function Game:defeatUnit(unit)
         end
     end
     
-    -- Clear selection if defeated unit was selected
-    if unit == selectedUnit then
-        self:selectUnit(nil)
-    end
+    print(unit.unitType .. " was defeated")
 end
 
 -- Check for game over conditions
 function Game:checkGameOver()
     -- Check if all player units are defeated
     if #playerUnits == 0 then
-        -- Game over - player lost
+        print("Game over - Player defeated")
         gamestate.switch(require("src.states.gameover"), self.game, false)
     end
     
     -- Check if all enemy units are defeated
     if #enemyUnits == 0 then
-        -- Level complete - player won
-        -- For now, just go to game over with win condition
+        print("Game over - Player victorious")
         gamestate.switch(require("src.states.gameover"), self.game, true)
     end
 end
 
--- Handle keypresses
+-- Handle key presses
 function Game:keypressed(key)
+    -- Global key handlers
     if key == "escape" then
-        -- Return to menu
         gamestate.switch(require("src.states.menu"), self.game)
-    elseif playerTurn then
-        -- Player input handling
-        if key == "space" then
-            -- Select unit under cursor or confirm action
-            local mouseX, mouseY = love.mouse.getPosition()
-            local worldX, worldY = gameCamera:mousePosition()
-            local gridX, gridY = grid:screenToGrid(worldX, worldY)
-            
-            if grid:isInBounds(gridX, gridY) then
-                local entity = grid:getEntityAt(gridX, gridY)
-                
-                if entity and entity.faction == "player" then
-                    -- Select player unit
-                    self:selectUnit(entity)
-                elseif selectedUnit and not selectedUnit.hasMoved then
-                    -- Try to move selected unit
-                    self:moveSelectedUnit(gridX, gridY)
-                end
-            end
-        elseif key == "tab" then
-            -- Cycle through player units
-            if #playerUnits > 0 then
-                local currentIndex = 0
-                
-                -- Find current selected unit index
-                if selectedUnit then
-                    for i, unit in ipairs(playerUnits) do
-                        if unit == selectedUnit then
-                            currentIndex = i
-                            break
-                        end
-                    end
-                end
-                
-                -- Select next unit
-                currentIndex = currentIndex % #playerUnits + 1
-                self:selectUnit(playerUnits[currentIndex])
-                
-                -- Center camera on selected unit
-                local screenX, screenY = grid:gridToScreen(selectedUnit.x, selectedUnit.y)
-                gameCamera:lookAt(screenX + grid.tileSize / 2, screenY + grid.tileSize / 2)
-            end
-        elseif key == "return" then
-            -- End turn
-            self:endPlayerTurn()
+    end
+    
+    -- Only handle gameplay keys during player turn
+    if not turnManager:isPlayerTurn() then
+        return
+    end
+    
+    -- Movement keys
+    if key == "up" or key == "w" then
+        if selectedUnit then
+            local targetX, targetY = selectedUnit.x, selectedUnit.y - 1
+            self:moveSelectedUnit(targetX, targetY)
+        end
+    elseif key == "down" or key == "s" then
+        if selectedUnit then
+            local targetX, targetY = selectedUnit.x, selectedUnit.y + 1
+            self:moveSelectedUnit(targetX, targetY)
+        end
+    elseif key == "left" or key == "a" then
+        if selectedUnit then
+            local targetX, targetY = selectedUnit.x - 1, selectedUnit.y
+            self:moveSelectedUnit(targetX, targetY)
+        end
+    elseif key == "right" or key == "d" then
+        if selectedUnit then
+            local targetX, targetY = selectedUnit.x + 1, selectedUnit.y
+            self:moveSelectedUnit(targetX, targetY)
+        end
+    end
+    
+    -- Selection and action keys
+    if key == "space" then
+        if selectedUnit then
+            -- Deselect if already selected
+            selectedUnit = nil
+            validMoves = {}
+        else
+            -- Try to select a unit at cursor position
+            -- (This would be implemented with cursor position tracking)
+        end
+    end
+    
+    -- End turn key
+    if key == "return" or key == "e" then
+        turnManager:endTurn()
+    end
+    
+    -- Ability keys
+    if key == "1" or key == "2" or key == "3" then
+        if selectedUnit then
+            local abilityIndex = tonumber(key)
+            -- Use ability (would be implemented with special abilities system)
         end
     end
 end
 
 -- Handle mouse presses
 function Game:mousepressed(x, y, button)
-    if button == 1 and playerTurn then -- Left click
-        local worldX, worldY = gameCamera:mousePosition()
-        local gridX, gridY = grid:screenToGrid(worldX, worldY)
+    -- Only handle mouse input during player turn
+    if not turnManager or not turnManager:isPlayerTurn() then
+        return
+    end
+    
+    -- Safety check for gameCamera
+    if not gameCamera then
+        print("Warning: gameCamera not initialized in mousepressed")
+        return
+    end
+    
+    -- Convert screen coordinates to grid coordinates
+    local worldX, worldY = gameCamera:toWorld(x, y)
+    
+    -- Safety check for grid
+    if not grid then
+        print("Warning: grid not initialized in mousepressed")
+        return
+    end
+    
+    local gridX, gridY = grid:screenToGrid(worldX, worldY)
+    
+    -- Check if coordinates are within grid bounds
+    if not grid:isInBounds(gridX, gridY) then
+        return
+    end
+    
+    -- Left click
+    if button == 1 then
+        -- Check if there's a unit at the clicked position
+        local entity = grid:getEntityAt(gridX, gridY)
         
-        if grid:isInBounds(gridX, gridY) then
-            local entity = grid:getEntityAt(gridX, gridY)
+        if entity and entity.faction == "player" then
+            -- Select player unit
+            self:selectUnit(entity)
+        elseif selectedUnit then
+            -- Check if it's a valid move position
+            local isValidMove = false
+            for _, move in ipairs(validMoves) do
+                if move.x == gridX and move.y == gridY then
+                    isValidMove = true
+                    break
+                end
+            end
             
-            if entity and entity.faction == "player" then
-                -- Select player unit
-                self:selectUnit(entity)
-            elseif selectedUnit and not selectedUnit.hasMoved then
-                -- Try to move selected unit
+            if isValidMove then
+                -- Move to empty tile
                 self:moveSelectedUnit(gridX, gridY)
+            elseif entity and entity.faction == "enemy" then
+                -- Attack enemy unit if in range
+                if self:canAttack(selectedUnit, entity) then
+                    self:attackUnit(selectedUnit, entity)
+                end
             end
         end
+    end
+    
+    -- Right click
+    if button == 2 then
+        -- Deselect unit
+        selectedUnit = nil
+        validMoves = {}
     end
 end
 

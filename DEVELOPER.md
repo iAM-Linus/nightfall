@@ -2,196 +2,421 @@
 
 ## Architecture Overview
 
-Nightfall Chess is built using the LÖVE framework and follows a modular architecture with the following components:
+Nightfall Chess follows a component-based architecture with clear separation of concerns. The main components are:
 
-### Core Systems
+1. **States**: Game states that control the flow of the application
+2. **Systems**: Core gameplay systems that implement game mechanics
+3. **Entities**: Game objects with properties and behaviors
+4. **UI**: User interface components for player interaction
+5. **Utilities**: Helper functions and classes
 
-1. **Game State Manager**
-   - Handles transitions between different game states
-   - Manages the game loop and updates
+## Directory Structure
 
-2. **Grid System**
-   - Manages the game grid and pathfinding
-   - Handles fog of war and visibility
-   - Provides utility functions for grid operations
+```
+nightfall/
+├── assets/           # Game assets (images, sounds, fonts)
+├── lib/              # Third-party libraries
+├── src/              # Source code
+│   ├── entities/     # Game entities
+│   ├── optimization/ # Performance and code quality tools
+│   ├── states/       # Game states
+│   ├── systems/      # Game systems
+│   ├── test/         # Testing infrastructure
+│   └── ui/           # User interface components
+└── main.lua          # Entry point
+```
 
-3. **Chess Movement System**
-   - Defines movement patterns for different chess pieces
-   - Validates moves based on chess rules
-   - Handles special movement cases
+## System Dependencies
 
-4. **Turn Management System**
-   - Controls turn order and initiative
-   - Manages action points
-   - Handles turn transitions and effects
+The following diagram shows the dependencies between major systems:
 
-5. **Combat System**
-   - Calculates damage and combat outcomes
-   - Manages attack patterns and ranges
-   - Handles critical hits and special attacks
+```
+Game
+ ├── TurnManager
+ │    ├── CombatSystem
+ │    └── EnemyAI
+ ├── SpecialAbilitiesSystem
+ │    └── StatusEffectsSystem
+ ├── ExperienceSystem
+ ├── InventoryManager
+ ├── MetaProgression
+ └── ProceduralGeneration
+```
 
-6. **Status Effects System**
-   - Applies and removes status effects
-   - Manages effect durations and stacking
-   - Handles stat modifications from effects
+## State Flow
 
-7. **Special Abilities System**
-   - Defines unique abilities for each unit type
-   - Manages cooldowns and energy costs
-   - Handles targeting and area effects
+The game follows this state flow:
 
-8. **Experience System**
-   - Tracks unit experience and level progression
-   - Manages skill points and skill trees
-   - Handles stat growth on level up
+1. **MainMenu**: Entry point with options
+2. **Game**: Main gameplay state
+   - **Combat**: Turn-based combat encounters
+   - **Inventory**: Item management
+   - **Map**: Dungeon navigation
+   - **LevelUp**: Character progression
+3. **GameOver**: End of run with results
+4. **MetaProgression**: Between-run upgrades
 
-9. **Procedural Generation System**
-   - Creates random dungeon layouts
-   - Generates rooms with appropriate challenges
-   - Places enemies, treasures, and obstacles
+## Implementation Details
 
-10. **Enemy AI System**
-    - Controls enemy decision making
-    - Implements different AI personalities
-    - Manages tactical patterns and coordination
+### Entity Component System
 
-11. **Meta-Progression System**
-    - Tracks persistent upgrades between runs
-    - Manages unlockable content
-    - Handles challenge and achievement systems
+Entities in Nightfall Chess use a lightweight component system:
 
-### Game States
+```lua
+-- Entity base class
+local Entity = class("Entity")
 
-1. **Menu State**
-   - Main menu interface
-   - Options and settings
-   - Game start and loading
+function Entity:initialize(components)
+    self.components = components or {}
+    self.id = generateUniqueId()
+end
 
-2. **Game State**
-   - Main gameplay loop
-   - Grid and unit management
-   - Player input handling
+function Entity:addComponent(name, component)
+    self.components[name] = component
+end
 
-3. **Combat State**
-   - Combat resolution
-   - Attack animations
-   - Combat log
+function Entity:getComponent(name)
+    return self.components[name]
+end
 
-4. **Inventory State**
-   - Item management
-   - Equipment handling
-   - Item usage
+function Entity:hasComponent(name)
+    return self.components[name] ~= nil
+end
+```
 
-5. **Game Over State**
-   - Victory and defeat screens
-   - Run statistics
-   - Return to menu options
+### Event System
 
-### Entities
+The game uses an event system for communication between components:
 
-1. **Unit**
-   - Base class for all game units
-   - Manages stats and abilities
-   - Handles movement and combat
+```lua
+-- Event system
+local EventSystem = class("EventSystem")
 
-2. **Item**
-   - Defines item properties and effects
-   - Handles equipment and consumables
-   - Manages item rarity and quality
+function EventSystem:initialize()
+    self.listeners = {}
+end
 
-### UI Components
+function EventSystem:addEventListener(eventType, listener)
+    if not self.listeners[eventType] then
+        self.listeners[eventType] = {}
+    end
+    table.insert(self.listeners[eventType], listener)
+end
 
-1. **HUD**
-   - Displays player information
-   - Shows turn and action indicators
-   - Manages notifications
+function EventSystem:dispatchEvent(eventType, data)
+    if not self.listeners[eventType] then return end
+    
+    for _, listener in ipairs(self.listeners[eventType]) do
+        listener(data)
+    end
+end
+```
 
-2. **Dialog System**
-   - Handles in-game conversations
-   - Manages text display and options
-   - Controls dialog flow
+### Grid System
 
-3. **Tooltip System**
-   - Shows contextual information
-   - Manages hover detection
-   - Handles positioning
+The game uses a grid-based system for positioning and movement:
 
-4. **Button Component**
-   - Creates interactive buttons
-   - Manages states and animations
-   - Handles click events
+```lua
+-- Grid system
+local Grid = class("Grid")
 
-5. **Menu System**
-   - Creates navigable menus
-   - Manages selection and activation
-   - Handles submenu navigation
+function Grid:initialize(width, height, tileSize)
+    self.width = width
+    self.height = height
+    self.tileSize = tileSize
+    self.cells = {}
+    
+    -- Initialize grid
+    for x = 1, width do
+        self.cells[x] = {}
+        for y = 1, height do
+            self.cells[x][y] = {
+                entities = {},
+                walkable = true,
+                visible = false
+            }
+        end
+    end
+end
 
-## Data Flow
+function Grid:getCell(x, y)
+    if x < 1 or x > self.width or y < 1 or y > self.height then
+        return nil
+    end
+    return self.cells[x][y]
+end
 
-1. **Input Handling**
-   - Player input is captured in the current game state
-   - Input is translated into game actions
-   - Actions are validated and executed
+function Grid:addEntity(entity, x, y)
+    local cell = self:getCell(x, y)
+    if not cell then return false end
+    
+    entity.x = x
+    entity.y = y
+    table.insert(cell.entities, entity)
+    return true
+end
 
-2. **Update Loop**
-   - Game state is updated based on time
-   - Systems are updated in sequence
-   - UI is updated to reflect changes
-
-3. **Rendering**
-   - Grid and units are rendered first
-   - Effects and animations are rendered next
-   - UI elements are rendered last
-
-## Extension Points
-
-### Adding New Units
-To add a new unit type:
-1. Define movement pattern in `chess_movement.lua`
-2. Create abilities in `special_abilities_system.lua`
-3. Add AI behavior in `enemy_ai.lua`
-4. Update unit creation in `unit.lua`
-
-### Adding New Items
-To add a new item:
-1. Define item properties in `item_database.lua`
-2. Implement effects in `item.lua`
-3. Add to loot tables in `procedural_generation.lua`
-
-### Adding New Abilities
-To add a new ability:
-1. Define ability in `special_abilities_system.lua`
-2. Add targeting logic and effects
-3. Update unit definitions to include the ability
-
-### Adding New Status Effects
-To add a new status effect:
-1. Define effect in `status_effects_system.lua`
-2. Implement application and removal logic
-3. Add visual indicators in the UI
-
-## Testing
-
-The game includes a comprehensive test suite in `test_suite.lua` that covers:
-- Unit tests for individual components
-- Integration tests for system interactions
-- Edge case handling
-- Complete game loop testing
-
-Run tests using `test_runner.lua` to generate a detailed report.
+function Grid:moveEntity(entity, newX, newY)
+    -- Remove from current cell
+    local currentCell = self:getCell(entity.x, entity.y)
+    if currentCell then
+        for i, e in ipairs(currentCell.entities) do
+            if e == entity then
+                table.remove(currentCell.entities, i)
+                break
+            end
+        end
+    end
+    
+    -- Add to new cell
+    return self:addEntity(entity, newX, newY)
+end
+```
 
 ## Performance Considerations
 
-- **Grid Operations**: Pathfinding can be expensive with large grids
-- **Procedural Generation**: Room generation should be optimized for larger dungeons
-- **Status Effects**: Many simultaneous effects can impact performance
-- **AI Decision Making**: Complex AI can slow down enemy turns
+### Rendering Optimization
 
-## Future Development
+The game uses several techniques to optimize rendering:
 
-Potential areas for expansion:
-- Multiplayer support
-- Additional unit types
-- More diverse environments
-- Enhanced visual effects
-- Mobile platform support
+1. **Culling**: Only rendering visible elements
+2. **Batching**: Grouping similar draw calls
+3. **Caching**: Pre-rendering static elements
+
+Example implementation:
+
+```lua
+function RenderSystem:draw()
+    -- Get visible area
+    local visibleX, visibleY, visibleWidth, visibleHeight = self:getVisibleArea()
+    
+    -- Calculate visible cells
+    local startX = math.max(1, math.floor(visibleX / self.grid.tileSize))
+    local startY = math.max(1, math.floor(visibleY / self.grid.tileSize))
+    local endX = math.min(self.grid.width, math.ceil((visibleX + visibleWidth) / self.grid.tileSize))
+    local endY = math.min(self.grid.height, math.ceil((visibleY + visibleHeight) / self.grid.tileSize))
+    
+    -- Draw only visible cells
+    for x = startX, endX do
+        for y = startY, endY do
+            self:drawCell(x, y)
+        end
+    end
+end
+```
+
+### Memory Management
+
+The game uses object pooling to reduce garbage collection:
+
+```lua
+function ObjectPool:initialize(factory, initialSize)
+    self.factory = factory
+    self.available = {}
+    self.inUse = {}
+    
+    -- Pre-create objects
+    for i = 1, initialSize do
+        table.insert(self.available, factory())
+    end
+end
+
+function ObjectPool:get()
+    local object
+    
+    if #self.available > 0 then
+        object = table.remove(self.available)
+    else
+        object = self.factory()
+    end
+    
+    table.insert(self.inUse, object)
+    return object
+end
+
+function ObjectPool:release(object)
+    for i, obj in ipairs(self.inUse) do
+        if obj == object then
+            table.remove(self.inUse, i)
+            
+            -- Reset object if it has a reset method
+            if object.reset then
+                object:reset()
+            end
+            
+            table.insert(self.available, object)
+            break
+        end
+    end
+end
+```
+
+## Testing Strategy
+
+The game uses a comprehensive testing approach:
+
+1. **Unit Tests**: Testing individual functions and methods
+2. **Integration Tests**: Testing system interactions
+3. **Gameplay Tests**: Testing complete gameplay scenarios
+
+Example test:
+
+```lua
+function GameplayTest:testCombatSystem()
+    -- Setup
+    local attacker = Unit:new("Knight")
+    local defender = Unit:new("Pawn")
+    local combatSystem = CombatSystem:new()
+    
+    -- Execute
+    local result = combatSystem:performAttack(attacker, defender)
+    
+    -- Verify
+    assert(result.success, "Attack should succeed")
+    assert(defender.health < defender.maxHealth, "Defender should take damage")
+    
+    return true, "Combat system test passed"
+end
+```
+
+## Extending the Game
+
+### Adding New Units
+
+To add a new unit type:
+
+1. Create a new unit class in `src/entities/units/`
+2. Define unit properties and abilities
+3. Add unit to the unit factory
+4. Create AI behavior for the unit
+5. Add unit to procedural generation
+
+Example:
+
+```lua
+-- New unit: Queen
+local Queen = class("Queen", Unit)
+
+function Queen:initialize()
+    Unit.initialize(self)
+    
+    self.type = "Queen"
+    self.maxHealth = 150
+    self.health = 150
+    self.attack = 12
+    self.defense = 8
+    self.speed = 8
+    
+    -- Add abilities
+    self:addAbility("RoyalCommand")
+    self:addAbility("DiagonalStrike")
+    self:addAbility("HorizontalSweep")
+end
+
+-- Register unit
+UnitFactory:registerUnit("Queen", Queen)
+```
+
+### Adding New Abilities
+
+To add a new ability:
+
+1. Create a new ability class in `src/systems/abilities/`
+2. Define ability properties and effects
+3. Add ability to the ability registry
+4. Assign ability to appropriate units
+
+Example:
+
+```lua
+-- New ability: RoyalCommand
+local RoyalCommand = class("RoyalCommand", Ability)
+
+function RoyalCommand:initialize()
+    Ability.initialize(self)
+    
+    self.name = "Royal Command"
+    self.description = "Grants an extra action to an allied unit"
+    self.cooldown = 3
+    self.energyCost = 30
+    self.targetType = "ally"
+    self.range = 3
+end
+
+function RoyalCommand:execute(user, target)
+    -- Grant extra action
+    target:grantExtraAction()
+    
+    -- Apply cooldown
+    user:setAbilityCooldown(self.id, self.cooldown)
+    
+    -- Use energy
+    user:useEnergy(self.energyCost)
+    
+    return true
+end
+
+-- Register ability
+AbilityRegistry:registerAbility("RoyalCommand", RoyalCommand)
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Performance Problems**
+   - Use the Performance Optimizer to identify bottlenecks
+   - Check for excessive object creation in update loops
+   - Verify that culling is working correctly
+
+2. **Memory Leaks**
+   - Check for objects not being properly released
+   - Verify that event listeners are being removed
+   - Use object pooling for frequently created objects
+
+3. **AI Issues**
+   - Check pathfinding calculations
+   - Verify threat assessment logic
+   - Ensure proper coordination between units
+
+### Debugging Tools
+
+1. **Debug Menu (F12)**
+   - Performance monitoring
+   - System toggles
+   - Visual debugging
+
+2. **Console Logging**
+   - Set log level in config
+   - Filter by system
+   - Export logs for analysis
+
+3. **Test Runner**
+   - Run specific tests
+   - Generate test reports
+   - Automate regression testing
+
+## Coding Standards
+
+1. **Naming Conventions**
+   - Classes: PascalCase
+   - Functions and variables: camelCase
+   - Constants: UPPER_CASE
+   - Private members: _prefixedWithUnderscore
+
+2. **File Organization**
+   - One class per file
+   - Group related files in directories
+   - Use clear, descriptive file names
+
+3. **Documentation**
+   - Document all public functions
+   - Include parameter descriptions
+   - Explain complex algorithms
+   - Add examples for important functions
+
+4. **Code Style**
+   - Use 4 spaces for indentation
+   - Limit line length to 100 characters
+   - Add blank lines between logical sections
+   - Use meaningful variable names

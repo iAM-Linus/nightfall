@@ -2,6 +2,7 @@
 -- Handles creation, management, and execution of special abilities for units
 
 local class = require("lib.middleclass.middleclass")
+local timer = require("lib.hump.timer")
 
 local SpecialAbilitiesSystem = class("SpecialAbilitiesSystem")
 
@@ -10,137 +11,173 @@ function SpecialAbilitiesSystem:initialize(game)
     
     -- Special ability definitions
     self.abilities = {
-        -- KNIGHT COMMANDER ABILITIES
+        -- KNIGHT ABILITIES
         
-        -- Royal Guard: Reduces damage taken by adjacent allies by 50% for 2 turns
-        royal_guard = {
-            name = "Royal Guard",
-            description = "Reduces damage taken by adjacent allies by 50% for 2 turns",
+        -- Knight's Charge: Dash to a location and damage enemies in path
+        knights_charge = {
+            name = "Knight's Charge",
+            description = "Dash to a location and damage enemies in path",
             icon = nil, -- Would be an image in a full implementation
-            energyCost = 3,
+            energyCost = 4,
             actionPointCost = 1,
             cooldown = 3,
-            targetType = "self",
-            range = 0,
-            unitType = "king",
+            targetType = "position",
+            range = 4,
+            unitType = "knight",
             onUse = function(user, target, x, y)
-                -- Apply effect to all adjacent allies
-                local allies = self:getAdjacentAllies(user)
-                
-                for _, ally in ipairs(allies) do
-                    -- Apply protected status effect
-                    if self.game.statusEffectsSystem then
-                        self.game.statusEffectsSystem:applyEffect(ally, "shielded", user)
-                    end
-                    
-                    -- Visual feedback
-                    if self.game.ui then
-                        self.game.ui:showNotification(ally.unitType:upper() .. " is protected by Royal Guard!", 1.5)
-                    end
-                end
-                
-                -- Visual effect for the user
-                if self.game.ui then
-                    self.game.ui:showNotification("Royal Guard activated!", 1.5)
-                end
-                
-                return true
-            end
-        },
-        
-        -- Tactical Command: Target ally gains an extra action point
-        tactical_command = {
-            name = "Tactical Command",
-            description = "Target ally gains an extra action point",
-            icon = nil,
-            energyCost = 2,
-            actionPointCost = 1,
-            cooldown = 2,
-            targetType = "ally",
-            range = 3,
-            unitType = "king",
-            onUse = function(user, target, x, y)
-                if not target or target.faction ~= user.faction then
+                -- Check if target position is valid
+                if not x or not y or not user.grid:isInBounds(x, y) then
                     return false
                 end
                 
-                -- Grant extra action point
-                if self.game.turnManager then
-                    self.game.turnManager:grantExtraActionPoint(target, 1)
-                else
-                    target.actionPoints = (target.actionPoints or 0) + 1
+                -- Check if position is reachable
+                local distance = math.abs(user.x - x) + math.abs(user.y - y)
+                if distance > 4 then
+                    return false
+                end
+                
+                -- Get all units in path
+                local path = self:getLinePath(user.x, user.y, x, y)
+                local hitUnits = {}
+                
+                for _, pos in ipairs(path) do
+                    local entity = user.grid:getEntity(pos.x, pos.y)
+                    if entity and entity ~= user and entity.faction ~= user.faction then
+                        table.insert(hitUnits, entity)
+                    end
+                end
+                
+                -- Move user to target position
+                user.grid:removeEntity(user.x, user.y)
+                user.x = x
+                user.y = y
+                user.grid:placeEntity(user, x, y)
+                
+                -- Deal damage to hit units
+                for _, hitUnit in ipairs(hitUnits) do
+                    local damage = math.ceil(user.stats.attack * 0.8)
+                    
+                    if self.game.combatSystem then
+                        self.game.combatSystem:applyDirectDamage(hitUnit, damage, {
+                            source = "ability",
+                            ability = "knights_charge",
+                            user = user,
+                            isCritical = false,
+                            isMiss = false
+                        })
+                    else
+                        hitUnit:takeDamage(damage, user)
+                    end
                 end
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(target.unitType:upper() .. " gains an extra action point!", 1.5)
-                end
+                print(user.unitType:upper() .. " used Knight's Charge!")
                 
                 return true
             end
         },
         
-        -- Inspiring Presence: All allies gain +2 attack for 3 turns
-        inspiring_presence = {
-            name = "Inspiring Presence",
-            description = "All allies gain +2 attack for 3 turns",
+        -- Feint: Reduce damage taken and counter next attack
+        feint = {
+            name = "Feint",
+            description = "Reduce damage taken and counter next attack",
             icon = nil,
-            energyCost = 4,
-            actionPointCost = 2,
-            cooldown = 4,
+            energyCost = 3,
+            actionPointCost = 1,
+            cooldown = 2,
             targetType = "self",
             range = 0,
-            unitType = "king",
+            unitType = "knight",
             onUse = function(user, target, x, y)
-                -- Apply effect to all allies on the board
-                local allies = self:getAllAllies(user)
-                
-                for _, ally in ipairs(allies) do
-                    -- Store original attack
-                    ally.originalAttack = ally.stats.attack
+                -- Apply counter status
+                if self.game.statusEffectsSystem then
+                    -- Apply shielded effect
+                    self.game.statusEffectsSystem:applyEffect(user, "shielded", user)
                     
-                    -- Increase attack
-                    ally.stats.attack = ally.stats.attack + 2
+                    -- Apply custom counter effect
+                    user.counterNextAttack = true
                     
-                    -- Register temporary effect
-                    if self.game.turnManager then
-                        self.game.turnManager:registerUnitStatusEffect(ally, "inspiringPresence", {
-                            name = "Inspired",
-                            description = "Attack increased by 2",
-                            duration = 3,
-                            triggerOn = "turnStart",
-                            onRemove = function(unit)
-                                if unit.originalAttack then
-                                    unit.stats.attack = unit.originalAttack
-                                    unit.originalAttack = nil
-                                end
-                            end
-                        })
-                    end
-                    
-                    -- Visual feedback
-                    if self.game.ui then
-                        self.game.ui:showNotification(ally.unitType:upper() .. " is inspired!", 1)
-                    end
+                    -- Set up counter removal after turn
+                    timer.after(1, function()
+                        user.counterNextAttack = false
+                    end)
                 end
                 
-                -- Visual effect for the user
-                if self.game.ui then
-                    self.game.ui:showNotification("Inspiring Presence activated!", 1.5)
-                end
+                -- Visual feedback
+                print(user.unitType:upper() .. " used Feint!")
                 
                 return true
             end
         },
         
-        -- ROOK GUARDIAN ABILITIES
+        -- Flanking Maneuver: Move to opposite side of target and attack with bonus damage
+        flanking_maneuver = {
+            name = "Flanking Maneuver",
+            description = "Move to opposite side of target and attack with bonus damage",
+            icon = nil,
+            energyCost = 5,
+            actionPointCost = 1,
+            cooldown = 3,
+            targetType = "enemy",
+            range = 3,
+            unitType = "knight",
+            onUse = function(user, target, x, y)
+                if not target or target.faction == user.faction then
+                    return false
+                end
+                
+                -- Calculate opposite position
+                local dx = target.x - user.x
+                local dy = target.y - user.y
+                local oppositeX = target.x + dx
+                local oppositeY = target.y + dy
+                
+                -- Check if opposite position is valid
+                if not user.grid:isInBounds(oppositeX, oppositeY) then
+                    return false
+                end
+                
+                -- Check if opposite position is empty
+                if user.grid:getEntity(oppositeX, oppositeY) then
+                    return false
+                end
+                
+                -- Move user to opposite position
+                user.grid:removeEntity(user.x, user.y)
+                user.x = oppositeX
+                user.y = oppositeY
+                user.grid:placeEntity(user, oppositeX, oppositeY)
+                
+                -- Attack target with bonus damage
+                local damage = math.ceil(user.stats.attack * 1.5)
+                
+                if self.game.combatSystem then
+                    self.game.combatSystem:applyDirectDamage(target, damage, {
+                        source = "ability",
+                        ability = "flanking_maneuver",
+                        user = user,
+                        isCritical = true,
+                        isMiss = false
+                    })
+                else
+                    target:takeDamage(damage, user)
+                end
+                
+                -- Visual feedback
+                print(user.unitType:upper() .. " used Flanking Maneuver!")
+                
+                return true
+            end
+        },
         
-        -- Fortify: Increases defense by 3 for 3 turns
+        -- ROOK ABILITIES
+        
+        -- Fortify: Increase defense and become immovable
         fortify = {
             name = "Fortify",
-            description = "Increases defense by 3 for 3 turns",
+            description = "Increase defense and become immovable",
             icon = nil,
-            energyCost = 2,
+            energyCost = 3,
             actionPointCost = 1,
             cooldown = 2,
             targetType = "self",
@@ -151,312 +188,308 @@ function SpecialAbilitiesSystem:initialize(game)
                 user.originalDefense = user.stats.defense
                 
                 -- Increase defense
-                user.stats.defense = user.stats.defense + 3
+                user.stats.defense = user.stats.defense * 2
                 
-                -- Register temporary effect
-                if self.game.turnManager then
-                    self.game.turnManager:registerUnitStatusEffect(user, "fortify", {
-                        name = "Fortified",
-                        description = "Defense increased by 3",
-                        duration = 3,
-                        triggerOn = "turnStart",
-                        onRemove = function(unit)
-                            if unit.originalDefense then
-                                unit.stats.defense = unit.originalDefense
-                                unit.originalDefense = nil
-                            end
-                        end
-                    })
-                end
+                -- Apply immovable status
+                user.isImmovable = true
+                
+                -- Set up effect removal after 2 turns
+                timer.after(2, function()
+                    -- Restore original defense
+                    if user.originalDefense then
+                        user.stats.defense = user.originalDefense
+                        user.originalDefense = nil
+                    end
+                    
+                    -- Remove immovable status
+                    user.isImmovable = false
+                    
+                    print(user.unitType:upper() .. " is no longer fortified")
+                end)
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(user.unitType:upper() .. " is fortified!", 1.5)
-                end
+                print(user.unitType:upper() .. " used Fortify!")
                 
                 return true
             end
         },
         
-        -- Shockwave: Damages all enemies in a straight line
+        -- Shockwave: Damage and push back all adjacent enemies
         shockwave = {
             name = "Shockwave",
-            description = "Damages all enemies in a straight line",
+            description = "Damage and push back all adjacent enemies",
             icon = nil,
-            energyCost = 3,
+            energyCost = 5,
             actionPointCost = 1,
             cooldown = 3,
-            targetType = "direction",
-            range = 4,
+            targetType = "self",
+            range = 0,
             unitType = "rook",
             onUse = function(user, target, x, y)
-                -- Calculate direction
-                local dx = 0
-                local dy = 0
+                -- Get all adjacent enemies
+                local adjacentPositions = {
+                    {x = user.x - 1, y = user.y},
+                    {x = user.x + 1, y = user.y},
+                    {x = user.x, y = user.y - 1},
+                    {x = user.x, y = user.y + 1}
+                }
                 
-                if x > user.x then dx = 1
-                elseif x < user.x then dx = -1 end
+                local hitUnits = {}
                 
-                if y > user.y then dy = 1
-                elseif y < user.y then dy = -1 end
-                
-                -- If no valid direction, return false
-                if dx == 0 and dy == 0 then
-                    return false
-                end
-                
-                -- Find all enemies in the line
-                local enemies = {}
-                local currentX = user.x + dx
-                local currentY = user.y + dy
-                local distance = 1
-                
-                while distance <= self.range do
-                    -- Check if position is valid
-                    if not self.game.grid:isValidPosition(currentX, currentY) then
-                        break
-                    end
-                    
-                    -- Check if there's an entity at this position
-                    local entity = self.game.grid:getEntityAt(currentX, currentY)
+                for _, pos in ipairs(adjacentPositions) do
+                    local entity = user.grid:getEntity(pos.x, pos.y)
                     if entity and entity.faction ~= user.faction then
-                        table.insert(enemies, entity)
+                        table.insert(hitUnits, {
+                            unit = entity,
+                            dx = pos.x - user.x,
+                            dy = pos.y - user.y
+                        })
                     end
-                    
-                    -- Move to next position in the line
-                    currentX = currentX + dx
-                    currentY = currentY + dy
-                    distance = distance + 1
                 end
                 
-                -- Apply damage to all enemies in the line
-                local baseDamage = user.stats.attack * 1.5
-                
-                for _, enemy in ipairs(enemies) do
+                -- Deal damage and push back
+                for _, hit in ipairs(hitUnits) do
+                    local hitUnit = hit.unit
+                    local pushX = hitUnit.x + hit.dx
+                    local pushY = hitUnit.y + hit.dy
+                    
+                    -- Deal damage
+                    local damage = math.ceil(user.stats.attack * 0.7)
+                    
                     if self.game.combatSystem then
-                        self.game.combatSystem:applyDamage(user, enemy, baseDamage, {
+                        self.game.combatSystem:applyDirectDamage(hitUnit, damage, {
                             source = "ability",
                             ability = "shockwave",
+                            user = user,
                             isCritical = false,
                             isMiss = false
                         })
                     else
-                        enemy.stats.health = math.max(0, enemy.stats.health - baseDamage)
+                        hitUnit:takeDamage(damage, user)
                     end
                     
-                    -- Visual feedback
-                    if self.game.ui then
-                        self.game.ui:showNotification(enemy.unitType:upper() .. " hit by Shockwave!", 1)
+                    -- Push back if possible
+                    if user.grid:isInBounds(pushX, pushY) and not user.grid:getEntity(pushX, pushY) then
+                        user.grid:removeEntity(hitUnit.x, hitUnit.y)
+                        hitUnit.x = pushX
+                        hitUnit.y = pushY
+                        user.grid:placeEntity(hitUnit, pushX, pushY)
                     end
                 end
                 
-                -- Visual effect for the ability
-                if self.game.ui then
-                    self.game.ui:showNotification("Shockwave released!", 1.5)
-                end
+                -- Visual feedback
+                print(user.unitType:upper() .. " used Shockwave!")
                 
                 return true
             end
         },
         
-        -- Stone Skin: Becomes immune to status effects for 2 turns
+        -- Stone Skin: Become immune to status effects
         stone_skin = {
             name = "Stone Skin",
-            description = "Becomes immune to status effects for 2 turns",
+            description = "Become immune to status effects",
             icon = nil,
-            energyCost = 3,
+            energyCost = 4,
             actionPointCost = 1,
             cooldown = 4,
             targetType = "self",
             range = 0,
             unitType = "rook",
             onUse = function(user, target, x, y)
-                -- Set status immunity flag
+                -- Apply status effect immunity
                 user.immuneToStatusEffects = true
                 
-                -- Register temporary effect
-                if self.game.turnManager then
-                    self.game.turnManager:registerUnitStatusEffect(user, "stoneSkin", {
-                        name = "Stone Skin",
-                        description = "Immune to status effects",
-                        duration = 2,
-                        triggerOn = "turnStart",
-                        onRemove = function(unit)
-                            unit.immuneToStatusEffects = nil
+                -- Clear existing negative status effects
+                if user.statusEffects then
+                    local i = 1
+                    while i <= #user.statusEffects do
+                        local effect = user.statusEffects[i]
+                        if effect.name == "Burning" or effect.name == "Stunned" or 
+                           effect.name == "Weakened" or effect.name == "Slowed" then
+                            table.remove(user.statusEffects, i)
+                        else
+                            i = i + 1
                         end
-                    })
+                    end
                 end
                 
-                -- Clear existing negative status effects
-                if self.game.statusEffectsSystem then
-                    self.game.statusEffectsSystem:clearEffectsByCategory(user, "negative")
-                end
+                -- Set up immunity removal after 3 turns
+                timer.after(3, function()
+                    user.immuneToStatusEffects = false
+                    print(user.unitType:upper() .. " is no longer immune to status effects")
+                end)
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(user.unitType:upper() .. " activates Stone Skin!", 1.5)
-                end
+                print(user.unitType:upper() .. " used Stone Skin!")
                 
                 return true
             end
         },
         
-        -- BISHOP MYSTIC ABILITIES
+        -- BISHOP ABILITIES
         
-        -- Arcane Bolt: Ranged attack that ignores defense
+        -- Healing Light: Heal self and adjacent allies
+        healing_light = {
+            name = "Healing Light",
+            description = "Heal self and adjacent allies",
+            icon = nil,
+            energyCost = 4,
+            actionPointCost = 1,
+            cooldown = 2,
+            targetType = "self",
+            range = 0,
+            unitType = "bishop",
+            onUse = function(user, target, x, y)
+                -- Heal self
+                local healAmount = math.ceil(user.stats.maxHealth * 0.3)
+                
+                if self.game.combatSystem then
+                    self.game.combatSystem:applyHealing(user, healAmount, {
+                        source = "ability",
+                        ability = "healing_light",
+                        user = user
+                    })
+                else
+                    user:heal(healAmount)
+                end
+                
+                -- Get adjacent allies
+                local adjacentPositions = {
+                    {x = user.x - 1, y = user.y},
+                    {x = user.x + 1, y = user.y},
+                    {x = user.x, y = user.y - 1},
+                    {x = user.x, y = user.y + 1}
+                }
+                
+                for _, pos in ipairs(adjacentPositions) do
+                    local entity = user.grid:getEntity(pos.x, pos.y)
+                    if entity and entity.faction == user.faction then
+                        -- Heal ally
+                        if self.game.combatSystem then
+                            self.game.combatSystem:applyHealing(entity, healAmount, {
+                                source = "ability",
+                                ability = "healing_light",
+                                user = user
+                            })
+                        else
+                            entity:heal(healAmount)
+                        end
+                    end
+                end
+                
+                -- Visual feedback
+                print(user.unitType:upper() .. " used Healing Light!")
+                
+                return true
+            end
+        },
+        
+        -- Mystic Barrier: Create impassable barriers
+        mystic_barrier = {
+            name = "Mystic Barrier",
+            description = "Create impassable barriers",
+            icon = nil,
+            energyCost = 5,
+            actionPointCost = 1,
+            cooldown = 3,
+            targetType = "position",
+            range = 3,
+            unitType = "bishop",
+            onUse = function(user, target, x, y)
+                -- Check if target position is valid
+                if not x or not y or not user.grid:isInBounds(x, y) then
+                    return false
+                end
+                
+                -- Check if position is empty
+                if user.grid:getEntity(x, y) then
+                    return false
+                end
+                
+                -- Create barrier entity
+                local barrier = {
+                    type = "barrier",
+                    x = x,
+                    y = y,
+                    isBarrier = true,
+                    duration = 3,
+                    creator = user
+                }
+                
+                -- Place barrier on grid
+                user.grid:placeEntity(barrier, x, y)
+                
+                -- Set up barrier removal
+                timer.after(3, function()
+                    user.grid:removeEntity(x, y)
+                    print("Mystic Barrier dissipates")
+                end)
+                
+                -- Visual feedback
+                print(user.unitType:upper() .. " used Mystic Barrier!")
+                
+                return true
+            end
+        },
+        
+        -- Arcane Bolt: Long-range attack that ignores defense
         arcane_bolt = {
             name = "Arcane Bolt",
-            description = "Ranged attack that ignores defense",
+            description = "Long-range attack that ignores defense",
             icon = nil,
-            energyCost = 2,
+            energyCost = 4,
             actionPointCost = 1,
-            cooldown = 1,
+            cooldown = 2,
             targetType = "enemy",
-            range = 3,
+            range = 5,
             unitType = "bishop",
             onUse = function(user, target, x, y)
                 if not target or target.faction == user.faction then
                     return false
                 end
                 
-                -- Calculate damage (ignores defense)
-                local damage = user.stats.attack * 1.2
+                -- Calculate distance
+                local distance = math.abs(user.x - target.x) + math.abs(user.y - target.y)
+                if distance > 5 then
+                    return false
+                end
                 
-                -- Apply damage
+                -- Deal damage ignoring defense
+                local damage = user.stats.attack
+                
                 if self.game.combatSystem then
                     self.game.combatSystem:applyDirectDamage(target, damage, {
                         source = "ability",
                         ability = "arcane_bolt",
+                        user = user,
+                        ignoreDefense = true,
                         isCritical = false,
                         isMiss = false
                     })
                 else
+                    -- Manually ignore defense
                     target.stats.health = math.max(0, target.stats.health - damage)
                 end
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification("Arcane Bolt hits " .. target.unitType:upper() .. "!", 1.5)
-                end
+                print(user.unitType:upper() .. " used Arcane Bolt!")
                 
                 return true
             end
         },
         
-        -- Healing Light: Restores 8 health to target ally
-        healing_light = {
-            name = "Healing Light",
-            description = "Restores 8 health to target ally",
+        -- PAWN ABILITIES
+        
+        -- Shield Bash: Stun adjacent enemy
+        shield_bash = {
+            name = "Shield Bash",
+            description = "Stun adjacent enemy",
             icon = nil,
             energyCost = 3,
             actionPointCost = 1,
-            cooldown = 2,
-            targetType = "ally",
-            range = 3,
-            unitType = "bishop",
-            onUse = function(user, target, x, y)
-                if not target or target.faction ~= user.faction then
-                    return false
-                end
-                
-                -- Calculate healing amount
-                local healAmount = 8
-                
-                -- Apply healing
-                if self.game.combatSystem then
-                    self.game.combatSystem:applyHealing(target, healAmount, {
-                        source = "ability",
-                        ability = "healing_light"
-                    })
-                else
-                    target.stats.health = math.min(target.stats.maxHealth, target.stats.health + healAmount)
-                end
-                
-                -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(target.unitType:upper() .. " healed for " .. healAmount .. " HP!", 1.5)
-                end
-                
-                return true
-            end
-        },
-        
-        -- Mystic Barrier: Creates a protective field that blocks 1 attack
-        mystic_barrier = {
-            name = "Mystic Barrier",
-            description = "Creates a protective field that blocks 1 attack",
-            icon = nil,
-            energyCost = 4,
-            actionPointCost = 1,
-            cooldown = 4,
-            targetType = "ally",
-            range = 2,
-            unitType = "bishop",
-            onUse = function(user, target, x, y)
-                if not target or target.faction ~= user.faction then
-                    return false
-                end
-                
-                -- Apply barrier effect
-                target.hasBarrier = true
-                
-                -- Hook into damage calculation
-                target.originalTakeDamage = target.takeDamage
-                target.takeDamage = function(self, damage, source)
-                    if self.hasBarrier then
-                        -- Block the attack
-                        self.hasBarrier = nil
-                        
-                        -- Visual feedback
-                        if self.game.ui then
-                            self.game.ui:showNotification("Mystic Barrier blocks the attack!", 1.5)
-                        end
-                        
-                        return 0
-                    end
-                    
-                    -- Normal damage calculation
-                    return self.originalTakeDamage(self, damage, source)
-                end
-                
-                -- Register effect removal after 3 turns if not used
-                if self.game.turnManager then
-                    self.game.turnManager:registerUnitStatusEffect(target, "mysticBarrier", {
-                        name = "Mystic Barrier",
-                        description = "Blocks the next attack",
-                        duration = 3,
-                        triggerOn = "turnStart",
-                        onRemove = function(unit)
-                            unit.hasBarrier = nil
-                            if unit.originalTakeDamage then
-                                unit.takeDamage = unit.originalTakeDamage
-                                unit.originalTakeDamage = nil
-                            end
-                        end
-                    })
-                end
-                
-                -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification("Mystic Barrier protects " .. target.unitType:upper() .. "!", 1.5)
-                end
-                
-                return true
-            end
-        },
-        
-        -- PAWN VANGUARD ABILITIES
-        
-        -- Shield Bash: Stuns target for 1 turn
-        shield_bash = {
-            name = "Shield Bash",
-            description = "Stuns target for 1 turn",
-            icon = nil,
-            energyCost = 2,
-            actionPointCost = 1,
             cooldown = 3,
             targetType = "enemy",
-            range = 1, -- Adjacent only
+            range = 1,
             unitType = "pawn",
             onUse = function(user, target, x, y)
                 if not target or target.faction == user.faction then
@@ -469,43 +502,43 @@ function SpecialAbilitiesSystem:initialize(game)
                     return false
                 end
                 
-                -- Apply stun effect
-                if self.game.statusEffectsSystem then
-                    self.game.statusEffectsSystem:applyEffect(target, "stunned", user)
-                end
+                -- Deal damage
+                local damage = math.ceil(user.stats.attack * 0.5)
                 
-                -- Deal minor damage
-                local damage = user.stats.attack * 0.5
                 if self.game.combatSystem then
-                    self.game.combatSystem:applyDamage(user, target, damage, {
+                    self.game.combatSystem:applyDirectDamage(target, damage, {
                         source = "ability",
                         ability = "shield_bash",
+                        user = user,
                         isCritical = false,
                         isMiss = false
                     })
                 else
-                    target.stats.health = math.max(0, target.stats.health - damage)
+                    target:takeDamage(damage, user)
+                end
+                
+                -- Apply stun
+                if self.game.statusEffectsSystem then
+                    self.game.statusEffectsSystem:applyEffect(target, "stunned", user)
                 end
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(target.unitType:upper() .. " is stunned by Shield Bash!", 1.5)
-                end
+                print(user.unitType:upper() .. " used Shield Bash!")
                 
                 return true
             end
         },
         
-        -- Advance: Move 2 squares forward and attack
+        -- Advance: Move forward and gain temporary attack boost
         advance = {
             name = "Advance",
-            description = "Move 2 squares forward and attack",
+            description = "Move forward and gain temporary attack boost",
             icon = nil,
-            energyCost = 3,
-            actionPointCost = 2,
+            energyCost = 2,
+            actionPointCost = 1,
             cooldown = 2,
-            targetType = "direction",
-            range = 2,
+            targetType = "self",
+            range = 0,
             unitType = "pawn",
             onUse = function(user, target, x, y)
                 -- Determine forward direction based on faction
@@ -513,584 +546,231 @@ function SpecialAbilitiesSystem:initialize(game)
                 local dy = 0
                 
                 if user.faction == "player" then
-                    -- Assuming player pawns move up
-                    dy = -1
+                    dx = 1 -- Player pawns move right
                 else
-                    -- Assuming enemy pawns move down
-                    dy = 1
+                    dx = -1 -- Enemy pawns move left
                 end
                 
-                -- Calculate target position
-                local targetX = user.x
-                local targetY = user.y + (dy * 2)
+                local newX = user.x + dx
+                local newY = user.y
                 
                 -- Check if position is valid
-                if not self.game.grid:isValidPosition(targetX, targetY) then
+                if not user.grid:isInBounds(newX, newY) then
                     return false
                 end
                 
-                -- Check if position is occupied
-                if self.game.grid:getEntityAt(targetX, targetY) then
+                -- Check if position is empty
+                if user.grid:getEntity(newX, newY) then
                     return false
                 end
                 
-                -- Move to the position
-                local originalX = user.x
-                local originalY = user.y
-                user.x = targetX
-                user.y = targetY
+                -- Move forward
+                user.grid:removeEntity(user.x, user.y)
+                user.x = newX
+                user.y = newY
+                user.grid:placeEntity(user, newX, newY)
                 
-                -- Update grid
-                self.game.grid:moveEntity(user, originalX, originalY, targetX, targetY)
-                
-                -- Check for enemies in attack range (diagonally forward)
-                local attackPositions = {
-                    {targetX - 1, targetY + dy},
-                    {targetX + 1, targetY + dy}
-                }
-                
-                local attacked = false
-                
-                for _, pos in ipairs(attackPositions) do
-                    local attackX, attackY = pos[1], pos[2]
-                    
-                    -- Check if position is valid
-                    if self.game.grid:isValidPosition(attackX, attackY) then
-                        -- Check if there's an enemy at this position
-                        local entity = self.game.grid:getEntityAt(attackX, attackY)
-                        if entity and entity.faction ~= user.faction then
-                            -- Attack the enemy
-                            if self.game.combatSystem then
-                                self.game.combatSystem:performAttack(user, entity)
-                                attacked = true
-                                break
-                            end
-                        end
-                    end
+                -- Apply attack boost
+                if self.game.statusEffectsSystem then
+                    self.game.statusEffectsSystem:applyEffect(user, "empowered", user)
                 end
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(user.unitType:upper() .. " advances forward!", 1.5)
-                    if attacked then
-                        self.game.ui:showNotification(user.unitType:upper() .. " attacks after advancing!", 1)
-                    end
-                end
+                print(user.unitType:upper() .. " used Advance!")
                 
                 return true
             end
         },
         
-        -- Promotion: Transform into a higher-tier unit when reaching the opposite side of the map
+        -- Promotion: Transform into a stronger unit at the cost of health
         promotion = {
             name = "Promotion",
-            description = "Transform into a higher-tier unit",
+            description = "Transform into a stronger unit at the cost of health",
             icon = nil,
-            energyCost = 5,
-            actionPointCost = 2,
+            energyCost = 8,
+            actionPointCost = 1,
             cooldown = 0, -- Can only be used once
             targetType = "self",
             range = 0,
             unitType = "pawn",
             onUse = function(user, target, x, y)
-                -- Check if pawn is at the opposite side of the board
-                local isAtPromotionRank = false
-                
-                if user.faction == "player" and user.y == 0 then
-                    isAtPromotionRank = true
-                elseif user.faction == "enemy" and user.y == self.game.grid.height - 1 then
-                    isAtPromotionRank = true
-                end
-                
-                if not isAtPromotionRank then
-                    if self.game.ui then
-                        self.game.ui:showNotification("Must be at the opposite side of the board to promote!", 1.5)
-                    end
+                -- Check if pawn has enough health
+                if user.stats.health < user.stats.maxHealth * 0.5 then
                     return false
                 end
                 
-                -- Show promotion options
-                local promotionOptions = {"queen", "rook", "bishop", "knight"}
+                -- Reduce health
+                user.stats.health = math.ceil(user.stats.health * 0.5)
                 
-                -- In a real implementation, this would show a UI for the player to choose
-                -- For now, we'll just promote to a queen
-                local promotionChoice = "queen"
+                -- Increase stats
+                user.stats.attack = user.stats.attack + 2
+                user.stats.defense = user.stats.defense + 1
+                user.stats.moveRange = user.stats.moveRange + 1
                 
-                -- Transform the pawn
-                user.unitType = promotionChoice
+                -- Change unit type
+                user.unitType = "queen"
                 
-                -- Update stats based on new unit type
-                if promotionChoice == "queen" then
-                    user.stats.attack = user.stats.attack + 4
-                    user.stats.defense = user.stats.defense - 1
-                    user.stats.moveRange = 3
-                    user.stats.attackRange = 3
-                elseif promotionChoice == "rook" then
-                    user.stats.attack = user.stats.attack + 3
-                    user.stats.defense = user.stats.defense + 1
-                    user.stats.moveRange = 3
-                    user.stats.attackRange = 2
-                elseif promotionChoice == "bishop" then
-                    user.stats.attack = user.stats.attack + 2
-                    user.stats.defense = user.stats.defense - 2
-                    user.stats.moveRange = 2
-                    user.stats.attackRange = 2
-                elseif promotionChoice == "knight" then
-                    user.stats.attack = user.stats.attack + 2
-                    user.stats.defense = user.stats.defense + 0
-                    user.stats.moveRange = 2
-                    user.stats.attackRange = 1
-                end
+                -- Update abilities
+                user.abilities = {"sovereign_wrath", "royal_decree", "strategic_repositioning"}
                 
-                -- Update movement pattern
-                user.movementPattern = promotionChoice
+                -- Reset ability cooldowns
+                user.abilityCooldowns = {}
                 
                 -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification("Pawn promoted to " .. promotionChoice:upper() .. "!", 2)
-                end
-                
-                return true
-            end
-        },
-        
-        -- QUEEN SOVEREIGN ABILITIES
-        
-        -- Royal Decree: All allies gain +1 action point
-        royal_decree = {
-            name = "Royal Decree",
-            description = "All allies gain +1 action point",
-            icon = nil,
-            energyCost = 4,
-            actionPointCost = 1,
-            cooldown = 4,
-            targetType = "self",
-            range = 0,
-            unitType = "queen",
-            onUse = function(user, target, x, y)
-                -- Apply effect to all allies on the board
-                local allies = self:getAllAllies(user)
-                
-                for _, ally in ipairs(allies) do
-                    -- Grant extra action point
-                    if self.game.turnManager then
-                        self.game.turnManager:grantExtraActionPoint(ally, 1)
-                    else
-                        ally.actionPoints = (ally.actionPoints or 0) + 1
-                    end
-                    
-                    -- Visual feedback
-                    if self.game.ui then
-                        self.game.ui:showNotification(ally.unitType:upper() .. " gains an extra action point!", 1)
-                    end
-                end
-                
-                -- Visual effect for the user
-                if self.game.ui then
-                    self.game.ui:showNotification("Royal Decree activated!", 1.5)
-                end
-                
-                return true
-            end
-        },
-        
-        -- Sovereign's Wrath: Powerful attack that hits all adjacent enemies
-        sovereigns_wrath = {
-            name = "Sovereign's Wrath",
-            description = "Powerful attack that hits all adjacent enemies",
-            icon = nil,
-            energyCost = 5,
-            actionPointCost = 2,
-            cooldown = 3,
-            targetType = "self",
-            range = 0,
-            unitType = "queen",
-            onUse = function(user, target, x, y)
-                -- Get all adjacent enemies
-                local adjacentPositions = {
-                    {user.x - 1, user.y - 1},
-                    {user.x, user.y - 1},
-                    {user.x + 1, user.y - 1},
-                    {user.x - 1, user.y},
-                    {user.x + 1, user.y},
-                    {user.x - 1, user.y + 1},
-                    {user.x, user.y + 1},
-                    {user.x + 1, user.y + 1}
-                }
-                
-                local enemies = {}
-                
-                for _, pos in ipairs(adjacentPositions) do
-                    local checkX, checkY = pos[1], pos[2]
-                    
-                    -- Check if position is valid
-                    if self.game.grid:isValidPosition(checkX, checkY) then
-                        -- Check if there's an enemy at this position
-                        local entity = self.game.grid:getEntityAt(checkX, checkY)
-                        if entity and entity.faction ~= user.faction then
-                            table.insert(enemies, entity)
-                        end
-                    end
-                end
-                
-                -- Apply damage to all adjacent enemies
-                local damage = user.stats.attack * 1.5
-                
-                for _, enemy in ipairs(enemies) do
-                    if self.game.combatSystem then
-                        self.game.combatSystem:applyDamage(user, enemy, damage, {
-                            source = "ability",
-                            ability = "sovereigns_wrath",
-                            isCritical = false,
-                            isMiss = false
-                        })
-                    else
-                        enemy.stats.health = math.max(0, enemy.stats.health - damage)
-                    end
-                    
-                    -- Apply weakened status effect
-                    if self.game.statusEffectsSystem then
-                        self.game.statusEffectsSystem:applyEffect(enemy, "weakened", user)
-                    end
-                    
-                    -- Visual feedback
-                    if self.game.ui then
-                        self.game.ui:showNotification(enemy.unitType:upper() .. " hit by Sovereign's Wrath!", 1)
-                    end
-                end
-                
-                -- Visual effect for the ability
-                if self.game.ui then
-                    self.game.ui:showNotification("Sovereign's Wrath unleashed!", 1.5)
-                end
-                
-                return true
-            end
-        },
-        
-        -- Strategic Repositioning: Swap positions with any ally on the board
-        strategic_repositioning = {
-            name = "Strategic Repositioning",
-            description = "Swap positions with any ally on the board",
-            icon = nil,
-            energyCost = 3,
-            actionPointCost = 1,
-            cooldown = 3,
-            targetType = "ally",
-            range = 999, -- Any distance
-            unitType = "queen",
-            onUse = function(user, target, x, y)
-                if not target or target.faction ~= user.faction then
-                    return false
-                end
-                
-                -- Swap positions
-                local userX, userY = user.x, user.y
-                local targetX, targetY = target.x, target.y
-                
-                -- Update positions
-                user.x, user.y = targetX, targetY
-                target.x, target.y = userX, userY
-                
-                -- Update grid
-                self.game.grid:swapEntities(user, target)
-                
-                -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(user.unitType:upper() .. " swaps positions with " .. target.unitType:upper() .. "!", 1.5)
-                end
-                
-                return true
-            end
-        },
-        
-        -- KNIGHT ABILITIES
-        
-        -- Knight's Charge: Move in L-shape and deal bonus damage
-        knights_charge = {
-            name = "Knight's Charge",
-            description = "Move in L-shape and deal bonus damage",
-            icon = nil,
-            energyCost = 2,
-            actionPointCost = 1,
-            cooldown = 2,
-            targetType = "position",
-            range = 3, -- L-shape movement
-            unitType = "knight",
-            onUse = function(user, target, x, y)
-                -- Check if movement is valid L-shape
-                local dx = math.abs(x - user.x)
-                local dy = math.abs(y - user.y)
-                
-                if not ((dx == 1 and dy == 2) or (dx == 2 and dy == 1)) then
-                    return false
-                end
-                
-                -- Check if position is valid
-                if not self.game.grid:isValidPosition(x, y) then
-                    return false
-                end
-                
-                -- Check if there's an entity at the target position
-                local entity = self.game.grid:getEntityAt(x, y)
-                
-                if entity then
-                    -- If it's an enemy, attack with bonus damage
-                    if entity.faction ~= user.faction then
-                        local damage = user.stats.attack * 1.5
-                        
-                        if self.game.combatSystem then
-                            self.game.combatSystem:applyDamage(user, entity, damage, {
-                                source = "ability",
-                                ability = "knights_charge",
-                                isCritical = false,
-                                isMiss = false
-                            })
-                        else
-                            entity.stats.health = math.max(0, entity.stats.health - damage)
-                        end
-                        
-                        -- Visual feedback
-                        if self.game.ui then
-                            self.game.ui:showNotification("Knight's Charge hits " .. entity.unitType:upper() .. "!", 1.5)
-                        end
-                        
-                        return true
-                    else
-                        -- Can't charge into ally
-                        return false
-                    end
-                else
-                    -- Move to the position
-                    local originalX = user.x
-                    local originalY = user.y
-                    user.x = x
-                    user.y = y
-                    
-                    -- Update grid
-                    self.game.grid:moveEntity(user, originalX, originalY, x, y)
-                    
-                    -- Visual feedback
-                    if self.game.ui then
-                        self.game.ui:showNotification(user.unitType:upper() .. " performs Knight's Charge!", 1.5)
-                    end
-                    
-                    return true
-                end
-            end
-        },
-        
-        -- Feint: Move and apply confused status to adjacent enemies
-        feint = {
-            name = "Feint",
-            description = "Move and apply confused status to adjacent enemies",
-            icon = nil,
-            energyCost = 3,
-            actionPointCost = 1,
-            cooldown = 3,
-            targetType = "position",
-            range = 2,
-            unitType = "knight",
-            onUse = function(user, target, x, y)
-                -- Check if movement is valid
-                local dx = math.abs(x - user.x)
-                local dy = math.abs(y - user.y)
-                
-                if dx > 2 or dy > 2 or (dx == 0 and dy == 0) then
-                    return false
-                end
-                
-                -- Check if position is valid
-                if not self.game.grid:isValidPosition(x, y) then
-                    return false
-                end
-                
-                -- Check if position is occupied
-                if self.game.grid:getEntityAt(x, y) then
-                    return false
-                end
-                
-                -- Move to the position
-                local originalX = user.x
-                local originalY = user.y
-                user.x = x
-                user.y = y
-                
-                -- Update grid
-                self.game.grid:moveEntity(user, originalX, originalY, x, y)
-                
-                -- Apply confused status to adjacent enemies
-                local adjacentPositions = {
-                    {x - 1, y - 1},
-                    {x, y - 1},
-                    {x + 1, y - 1},
-                    {x - 1, y},
-                    {x + 1, y},
-                    {x - 1, y + 1},
-                    {x, y + 1},
-                    {x + 1, y + 1}
-                }
-                
-                for _, pos in ipairs(adjacentPositions) do
-                    local checkX, checkY = pos[1], pos[2]
-                    
-                    -- Check if position is valid
-                    if self.game.grid:isValidPosition(checkX, checkY) then
-                        -- Check if there's an enemy at this position
-                        local entity = self.game.grid:getEntityAt(checkX, checkY)
-                        if entity and entity.faction ~= user.faction then
-                            -- Apply confused status
-                            if self.game.statusEffectsSystem then
-                                self.game.statusEffectsSystem:applyEffect(entity, "confused", user)
-                            end
-                            
-                            -- Visual feedback
-                            if self.game.ui then
-                                self.game.ui:showNotification(entity.unitType:upper() .. " is confused by Feint!", 1)
-                            end
-                        end
-                    end
-                end
-                
-                -- Visual feedback
-                if self.game.ui then
-                    self.game.ui:showNotification(user.unitType:upper() .. " performs Feint!", 1.5)
-                end
+                print(user.unitType:upper() .. " used Promotion and transformed into a QUEEN!")
                 
                 return true
             end
         }
     }
-    
-    -- Register abilities with units
-    self:registerUnitAbilities()
 end
 
--- Register abilities with their respective unit types
-function SpecialAbilitiesSystem:registerUnitAbilities()
-    -- This would be called when units are created
-    -- For now, we'll just prepare the ability definitions
-end
-
--- Get all abilities for a specific unit type
-function SpecialAbilitiesSystem:getAbilitiesForUnitType(unitType)
-    local abilities = {}
-    
-    for id, ability in pairs(self.abilities) do
-        if ability.unitType == unitType then
-            abilities[id] = ability
-        end
-    end
-    
-    return abilities
-end
-
--- Get a specific ability by ID
+-- Get ability definition
 function SpecialAbilitiesSystem:getAbility(abilityId)
     return self.abilities[abilityId]
 end
 
--- Use an ability
-function SpecialAbilitiesSystem:useAbility(user, abilityId, target, x, y)
+-- Check if a unit can use an ability
+function SpecialAbilitiesSystem:canUseAbility(unit, abilityId)
+    -- Check if ability exists
     local ability = self.abilities[abilityId]
-    
     if not ability then
-        return false, "Ability not found"
+        return false
     end
     
-    -- Check if unit type can use this ability
-    if ability.unitType ~= user.unitType then
-        return false, "Unit cannot use this ability"
+    -- Check if unit has this ability
+    local hasAbility = false
+    for _, id in ipairs(unit.abilities) do
+        if id == abilityId then
+            hasAbility = true
+            break
+        end
+    end
+    
+    if not hasAbility then
+        return false
+    end
+    
+    -- Check if ability is on cooldown
+    if (unit.abilityCooldowns[abilityId] or 0) > 0 then
+        return false
+    end
+    
+    -- Check if unit has already used an ability this turn
+    if unit.hasUsedAbility then
+        return false
     end
     
     -- Check energy cost
-    if user.energy < ability.energyCost then
-        return false, "Not enough energy"
+    if ability.energyCost and unit.stats.energy < ability.energyCost then
+        return false
     end
     
-    -- Check action point cost
-    if user.actionPoints < ability.actionPointCost then
-        return false, "Not enough action points"
+    -- Check unit type restriction
+    if ability.unitType and unit.unitType ~= ability.unitType then
+        return false
     end
     
-    -- Check cooldown
-    if user.abilityCooldowns and user.abilityCooldowns[abilityId] and user.abilityCooldowns[abilityId] > 0 then
-        return false, "Ability on cooldown"
-    end
-    
-    -- Initialize cooldowns if needed
-    if not user.abilityCooldowns then
-        user.abilityCooldowns = {}
-    end
-    
-    -- Use the ability
-    local success = ability.onUse(user, target, x, y)
-    
-    if success then
-        -- Deduct energy
-        user.energy = user.energy - ability.energyCost
-        
-        -- Deduct action points
-        user.actionPoints = user.actionPoints - ability.actionPointCost
-        
-        -- Set cooldown
-        user.abilityCooldowns[abilityId] = ability.cooldown
-        
-        return true
-    end
-    
-    return false, "Ability use failed"
+    return true
 end
 
--- Update cooldowns at the end of a unit's turn
-function SpecialAbilitiesSystem:updateCooldowns(unit)
-    if not unit.abilityCooldowns then
-        return
+-- Use an ability
+function SpecialAbilitiesSystem:useAbility(unit, abilityId, target, x, y)
+    -- Check if ability can be used
+    if not self:canUseAbility(unit, abilityId) then
+        return false
     end
     
-    for abilityId, cooldown in pairs(unit.abilityCooldowns) do
-        if cooldown > 0 then
-            unit.abilityCooldowns[abilityId] = cooldown - 1
+    -- Get ability definition
+    local ability = self.abilities[abilityId]
+    
+    -- Use the ability
+    local success = false
+    if ability.onUse then
+        success = ability.onUse(unit, target, x, y)
+    end
+    
+    if success then
+        -- Use energy
+        if ability.energyCost then
+            unit.stats.energy = unit.stats.energy - ability.energyCost
+        end
+        
+        -- Set cooldown
+        if ability.cooldown then
+            unit.abilityCooldowns[abilityId] = ability.cooldown
+        end
+        
+        -- Mark as having used an ability
+        unit.hasUsedAbility = true
+    end
+    
+    return success
+end
+
+-- Get valid targets for an ability
+function SpecialAbilitiesSystem:getValidTargets(unit, abilityId)
+    -- Check if ability exists
+    local ability = self.abilities[abilityId]
+    if not ability then
+        return {}
+    end
+    
+    -- Check if unit can use this ability
+    if not self:canUseAbility(unit, abilityId) then
+        return {}
+    end
+    
+    local targets = {}
+    
+    -- Get targets based on ability target type
+    if ability.targetType == "self" then
+        -- Self-targeted ability
+        targets = {{x = unit.x, y = unit.y, unit = unit}}
+    elseif ability.targetType == "ally" then
+        -- Ally-targeted ability
+        for _, ally in ipairs(self:getAllies(unit)) do
+            local distance = math.abs(unit.x - ally.x) + math.abs(unit.y - ally.y)
+            if distance <= ability.range then
+                table.insert(targets, {x = ally.x, y = ally.y, unit = ally})
+            end
+        end
+    elseif ability.targetType == "enemy" then
+        -- Enemy-targeted ability
+        for _, enemy in ipairs(self:getEnemies(unit)) do
+            local distance = math.abs(unit.x - enemy.x) + math.abs(unit.y - enemy.y)
+            if distance <= ability.range then
+                table.insert(targets, {x = enemy.x, y = enemy.y, unit = enemy})
+            end
+        end
+    elseif ability.targetType == "position" then
+        -- Position-targeted ability
+        for y = math.max(1, unit.y - ability.range), math.min(unit.grid.height, unit.y + ability.range) do
+            for x = math.max(1, unit.x - ability.range), math.min(unit.grid.width, unit.x + ability.range) do
+                local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
+                if distance <= ability.range then
+                    table.insert(targets, {x = x, y = y})
+                end
+            end
         end
     end
+    
+    return targets
 end
 
 -- Get all allies of a unit
-function SpecialAbilitiesSystem:getAllAllies(unit)
+function SpecialAbilitiesSystem:getAllies(unit)
     local allies = {}
     
-    for entity, _ in pairs(self.game.grid.entities) do
-        if entity.faction == unit.faction then
-            table.insert(allies, entity)
-        end
+    if not unit.grid then
+        return allies
     end
     
-    return allies
-end
-
--- Get adjacent allies of a unit
-function SpecialAbilitiesSystem:getAdjacentAllies(unit)
-    local allies = {}
-    
-    local adjacentPositions = {
-        {unit.x - 1, unit.y - 1},
-        {unit.x, unit.y - 1},
-        {unit.x + 1, unit.y - 1},
-        {unit.x - 1, unit.y},
-        {unit.x + 1, unit.y},
-        {unit.x - 1, unit.y + 1},
-        {unit.x, unit.y + 1},
-        {unit.x + 1, unit.y + 1}
-    }
-    
-    for _, pos in ipairs(adjacentPositions) do
-        local x, y = pos[1], pos[2]
-        
-        -- Check if position is valid
-        if self.game.grid:isValidPosition(x, y) then
-            -- Check if there's an ally at this position
-            local entity = self.game.grid:getEntityAt(x, y)
-            if entity and entity.faction == unit.faction then
+    -- Get all units on the grid
+    for y = 1, unit.grid.height do
+        for x = 1, unit.grid.width do
+            local entity = unit.grid:getEntity(x, y)
+            if entity and entity ~= unit and entity.faction == unit.faction then
                 table.insert(allies, entity)
             end
         end
@@ -1100,40 +780,17 @@ function SpecialAbilitiesSystem:getAdjacentAllies(unit)
 end
 
 -- Get all enemies of a unit
-function SpecialAbilitiesSystem:getAllEnemies(unit)
+function SpecialAbilitiesSystem:getEnemies(unit)
     local enemies = {}
     
-    for entity, _ in pairs(self.game.grid.entities) do
-        if entity.faction ~= unit.faction then
-            table.insert(enemies, entity)
-        end
+    if not unit.grid then
+        return enemies
     end
     
-    return enemies
-end
-
--- Get adjacent enemies of a unit
-function SpecialAbilitiesSystem:getAdjacentEnemies(unit)
-    local enemies = {}
-    
-    local adjacentPositions = {
-        {unit.x - 1, unit.y - 1},
-        {unit.x, unit.y - 1},
-        {unit.x + 1, unit.y - 1},
-        {unit.x - 1, unit.y},
-        {unit.x + 1, unit.y},
-        {unit.x - 1, unit.y + 1},
-        {unit.x, unit.y + 1},
-        {unit.x + 1, unit.y + 1}
-    }
-    
-    for _, pos in ipairs(adjacentPositions) do
-        local x, y = pos[1], pos[2]
-        
-        -- Check if position is valid
-        if self.game.grid:isValidPosition(x, y) then
-            -- Check if there's an enemy at this position
-            local entity = self.game.grid:getEntityAt(x, y)
+    -- Get all units on the grid
+    for y = 1, unit.grid.height do
+        for x = 1, unit.grid.width do
+            local entity = unit.grid:getEntity(x, y)
             if entity and entity.faction ~= unit.faction then
                 table.insert(enemies, entity)
             end
@@ -1143,86 +800,104 @@ function SpecialAbilitiesSystem:getAdjacentEnemies(unit)
     return enemies
 end
 
--- Check if a position is in range of a unit
-function SpecialAbilitiesSystem:isInRange(unit, x, y, range)
-    local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
-    return distance <= range
-end
-
--- Get valid targets for an ability
-function SpecialAbilitiesSystem:getValidTargets(unit, abilityId)
-    local ability = self.abilities[abilityId]
+-- Get adjacent allies of a unit
+function SpecialAbilitiesSystem:getAdjacentAllies(unit)
+    local allies = {}
     
-    if not ability then
-        return {}
+    if not unit.grid then
+        return allies
     end
     
-    local targets = {}
+    -- Check adjacent positions
+    local adjacentPositions = {
+        {x = unit.x - 1, y = unit.y},
+        {x = unit.x + 1, y = unit.y},
+        {x = unit.x, y = unit.y - 1},
+        {x = unit.x, y = unit.y + 1}
+    }
     
-    if ability.targetType == "self" then
-        -- Self-targeting ability
-        targets = {unit}
-    elseif ability.targetType == "ally" then
-        -- Ally-targeting ability
-        for entity, _ in pairs(self.game.grid.entities) do
-            if entity.faction == unit.faction and self:isInRange(unit, entity.x, entity.y, ability.range) then
-                table.insert(targets, entity)
-            end
+    for _, pos in ipairs(adjacentPositions) do
+        local entity = unit.grid:getEntity(pos.x, pos.y)
+        if entity and entity.faction == unit.faction then
+            table.insert(allies, entity)
         end
-    elseif ability.targetType == "enemy" then
-        -- Enemy-targeting ability
-        for entity, _ in pairs(self.game.grid.entities) do
-            if entity.faction ~= unit.faction and self:isInRange(unit, entity.x, entity.y, ability.range) then
-                table.insert(targets, entity)
-            end
+    end
+    
+    return allies
+end
+
+-- Get adjacent enemies of a unit
+function SpecialAbilitiesSystem:getAdjacentEnemies(unit)
+    local enemies = {}
+    
+    if not unit.grid then
+        return enemies
+    end
+    
+    -- Check adjacent positions
+    local adjacentPositions = {
+        {x = unit.x - 1, y = unit.y},
+        {x = unit.x + 1, y = unit.y},
+        {x = unit.x, y = unit.y - 1},
+        {x = unit.x, y = unit.y + 1}
+    }
+    
+    for _, pos in ipairs(adjacentPositions) do
+        local entity = unit.grid:getEntity(pos.x, pos.y)
+        if entity and entity.faction ~= unit.faction then
+            table.insert(enemies, entity)
         end
-    elseif ability.targetType == "position" or ability.targetType == "direction" then
-        -- Position-targeting ability
-        -- This would return valid grid positions
-        -- Implementation depends on the grid system
     end
     
-    return targets
+    return enemies
 end
 
--- Get ability cooldown for a unit
-function SpecialAbilitiesSystem:getAbilityCooldown(unit, abilityId)
-    if not unit.abilityCooldowns or not unit.abilityCooldowns[abilityId] then
-        return 0
+-- Get a line path between two points
+function SpecialAbilitiesSystem:getLinePath(x1, y1, x2, y2)
+    local path = {}
+    
+    -- Use Bresenham's line algorithm
+    local dx = math.abs(x2 - x1)
+    local dy = math.abs(y2 - y1)
+    local sx = x1 < x2 and 1 or -1
+    local sy = y1 < y2 and 1 or -1
+    local err = dx - dy
+    
+    while true do
+        table.insert(path, {x = x1, y = y1})
+        
+        if x1 == x2 and y1 == y2 then
+            break
+        end
+        
+        local e2 = 2 * err
+        if e2 > -dy then
+            err = err - dy
+            x1 = x1 + sx
+        end
+        if e2 < dx then
+            err = err + dx
+            y1 = y1 + sy
+        end
     end
     
-    return unit.abilityCooldowns[abilityId]
+    return path
 end
 
--- Check if a unit can use an ability
-function SpecialAbilitiesSystem:canUseAbility(unit, abilityId)
-    local ability = self.abilities[abilityId]
-    
-    if not ability then
-        return false, "Ability not found"
+-- Initialize a unit with abilities
+function SpecialAbilitiesSystem:initializeUnit(unit)
+    -- Make sure unit has abilities
+    if not unit.abilities or #unit.abilities == 0 then
+        unit.abilities = unit:getDefaultAbilities()
     end
     
-    -- Check if unit type can use this ability
-    if ability.unitType ~= unit.unitType then
-        return false, "Unit cannot use this ability"
+    -- Initialize ability cooldowns
+    unit.abilityCooldowns = {}
+    for _, abilityId in ipairs(unit.abilities) do
+        unit.abilityCooldowns[abilityId] = 0
     end
     
-    -- Check energy cost
-    if unit.energy < ability.energyCost then
-        return false, "Not enough energy"
-    end
-    
-    -- Check action point cost
-    if unit.actionPoints < ability.actionPointCost then
-        return false, "Not enough action points"
-    end
-    
-    -- Check cooldown
-    if unit.abilityCooldowns and unit.abilityCooldowns[abilityId] and unit.abilityCooldowns[abilityId] > 0 then
-        return false, "Ability on cooldown"
-    end
-    
-    return true
+    return unit
 end
 
 return SpecialAbilitiesSystem

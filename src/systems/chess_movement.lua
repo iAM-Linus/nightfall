@@ -119,7 +119,7 @@ function ChessMovement.getLinearMoves(directions, x, y, grid, unit, maxDistance)
                     table.insert(validMoves, {x = newX, y = newY})
                     
                     -- Check if terrain blocks movement
-                    local terrain = grid:getTerrainAt(newX, newY)
+                    local terrain = grid:getTileType(newX, newY)
                     if terrain and terrain.blocksMovement then
                         break
                     end
@@ -155,7 +155,7 @@ function ChessMovement.getKnightMoves(x, y, grid, unit)
                 end
             else
                 -- Empty space, can move here
-                local terrain = grid:getTerrainAt(newX, newY)
+                local terrain = grid:getTileType(newX, newY)
                 if not terrain or not terrain.blocksMovement then
                     table.insert(validMoves, {x = newX, y = newY})
                 end
@@ -186,7 +186,7 @@ function ChessMovement.getKingMoves(x, y, grid, unit)
                 end
             else
                 -- Empty space, can move here
-                local terrain = grid:getTerrainAt(newX, newY)
+                local terrain = grid:getTileType(newX, newY)
                 if not terrain or not terrain.blocksMovement then
                     table.insert(validMoves, {x = newX, y = newY})
                 end
@@ -221,7 +221,7 @@ function ChessMovement.getPawnMoves(x, y, grid, unit)
         
         if not entity then
             -- Empty space, can move here
-            local terrain = grid:getTerrainAt(newX, newY)
+            local terrain = grid:getTileType(newX, newY)
             if not terrain or not terrain.blocksMovement then
                 table.insert(validMoves, {x = newX, y = newY})
                 
@@ -235,7 +235,7 @@ function ChessMovement.getPawnMoves(x, y, grid, unit)
                         
                         if not extraEntity then
                             -- Empty space, can move here
-                            local extraTerrain = grid:getTerrainAt(extraX, extraY)
+                            local extraTerrain = grid:getTileType(extraX, extraY)
                             if not extraTerrain or not extraTerrain.blocksMovement then
                                 table.insert(validMoves, {x = extraX, y = extraY})
                             end

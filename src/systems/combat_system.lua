@@ -852,9 +852,6 @@ function CombatSystem:handleUnitDefeat(attacker, defender)
         end
     end
     
-    -- Remove unit from grid
-    self.game.grid:removeEntity(defender)
-    
     -- Award experience to attacker
     if attacker and attacker.addExperience then
         local expGain = 0
@@ -874,6 +871,9 @@ function CombatSystem:handleUnitDefeat(attacker, defender)
         -- Apply experience
         attacker:addExperience(expGain)
     end
+
+    -- Remove unit using game
+    --self.game:defeatUnit(defender)
 end
 
 -- Apply a status effect to a unit

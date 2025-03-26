@@ -52,6 +52,9 @@ function TurnManager:initialize(game)
     -- Game state
     self.gameOver = false
     self.winner = nil
+    
+    -- Grid reference (will be set by game)
+    self.grid = nil
 end
 
 -- Start a new game
@@ -78,7 +81,7 @@ function TurnManager:startGame()
     self:startTurn()
     
     -- Notify UI
-    if self.game.ui then
+    if self.game and self.game.ui then
         self.game.ui:setPlayerTurn(self:isPlayerTurn())
         self.game.ui:setActionPoints(self.currentActionPoints, self.maxActionPoints)
     end
@@ -88,12 +91,33 @@ end
 function TurnManager:calculateInitiativeOrder()
     self.initiativeOrder = {}
     
+    -- Safety check: ensure grid exists
+    if not self.game or not self.grid or not self.grid.entities then
+        print("Warning: Grid not initialized for initiative calculation")
+        return
+    end
+    
     -- Get all units from the grid
     local units = {}
-    for entity, _ in pairs(self.game.grid.entities) do
+    for entity, _ in pairs(self.grid.entities) do
         if entity.faction then
             table.insert(units, entity)
         end
+    end
+    
+    -- If no units found, try using the grid reference directly
+    if #units == 0 and self.grid and self.grid.entities then
+        for entity, _ in pairs(self.grid.entities) do
+            if entity.faction then
+                table.insert(units, entity)
+            end
+        end
+    end
+    
+    -- If still no units, return empty initiative order
+    if #units == 0 then
+        print("Warning: No units found for initiative calculation")
+        return
     end
     
     -- Sort by initiative (based on unit stats, random factors, etc.)
@@ -153,7 +177,7 @@ function TurnManager:startTurn()
         self.currentActionPoints = self.maxActionPoints
         
         -- Notify UI of action points change
-        if self.game.ui then
+        if self.game and self.game.ui then
             self.game.ui:setActionPoints(self.currentActionPoints, self.maxActionPoints)
         end
     end
@@ -176,7 +200,7 @@ function TurnManager:startTurn()
     end
     
     -- Update UI
-    if self.game.ui then
+    if self.game and self.game.ui then
         self.game.ui:setPlayerTurn(self:isPlayerTurn())
         
         -- Update selected unit in HUD
@@ -242,580 +266,126 @@ function TurnManager:endRound()
     -- Trigger round start events
     self:triggerRoundStart()
     
+    -- Reset initiative index
+    self.currentInitiativeIndex = 1
+    
     -- Start first turn of new round
     self:startTurn()
-    
-    -- Update UI
-    if self.game.ui then
-        self.game.ui:showNotification("Round " .. self.roundNumber .. " begins!", 2)
-    end
 end
 
--- Process an enemy unit's turn (AI)
+-- Process enemy turn using AI
 function TurnManager:processEnemyTurn(unit)
-    -- Enhanced AI for enemy units
+    -- Safety check
+    if not unit or unit.faction ~= "enemy" then return end
     
-    -- Wait a bit for visual clarity
-    timer.after(0.5, function()
-        -- Check if unit has status effects that prevent actions
-        if self:hasPreventingStatusEffect(unit) then
-            -- Skip turn if unit is stunned, frozen, etc.
-            if self.game.ui then
-                self.game.ui:showNotification(unit.unitType:upper() .. " is unable to act!", 1.5)
-            end
-            
-            timer.after(0.5, function()
-                self:endTurn()
-            end)
-            return
-        end
-        
-        -- Try to attack a player unit if possible
-        local attacked = false
-        local targets = unit:getValidAttackTargets()
-        
-        if #targets > 0 then
-            -- Sort targets by priority (low health, high threat, etc.)
-            table.sort(targets, function(a, b)
-                -- Prioritize low health targets
-                if a.entity.stats and b.entity.stats then
-                    local aHealthPercent = a.entity.stats.health / a.entity.stats.maxHealth
-                    local bHealthPercent = b.entity.stats.health / b.entity.stats.maxHealth
-                    
-                    if math.abs(aHealthPercent - bHealthPercent) > 0.2 then
-                        return aHealthPercent < bHealthPercent
-                    end
-                end
-                
-                -- Then prioritize high-value targets
-                local typePriority = {
-                    king = 1,
-                    queen = 2,
-                    rook = 3,
-                    bishop = 4,
-                    knight = 5,
-                    pawn = 6
-                }
-                
-                local aPriority = typePriority[a.entity.unitType] or 99
-                local bPriority = typePriority[b.entity.unitType] or 99
-                
-                return aPriority < bPriority
-            end)
-            
-            -- Attack the highest priority target
-            local target = targets[1].entity
-            
-            -- Show attack notification
-            if self.game.ui then
-                self.game.ui:showNotification(unit.unitType:upper() .. " attacks " .. target.unitType:upper() .. "!", 1.5)
-                self.game.ui:setTargetUnit(target)
-            end
-            
-            -- Perform attack
-            unit:attack(target)
-            attacked = true
-            
-            -- Check for game over condition
-            if target.unitType == "king" and target.stats.health <= 0 then
-                self:setGameOver("enemy")
-            end
-        end
-        
-        -- If didn't attack, try to move
-        if not attacked then
-            local movePositions = unit:getValidMovePositions()
-            
-            if #movePositions > 0 then
-                -- Find strategic position to move to
-                local bestPos = self:findBestEnemyMovePosition(unit, movePositions)
-                
-                -- Show move notification
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is moving", 1)
-                end
-                
-                -- Move to best position
-                if bestPos then
-                    unit:moveTo(bestPos.x, bestPos.y)
-                else
-                    -- Move to random position as fallback
-                    local randomPos = movePositions[math.random(#movePositions)]
-                    unit:moveTo(randomPos.x, randomPos.y)
-                end
-            end
-        end
-        
-        -- End turn after AI processing
-        timer.after(0.8, function()
-            -- Clear target unit from UI
-            if self.game.ui then
-                self.game.ui:setTargetUnit(nil)
-            end
-            
-            self:endTurn()
-        end)
-    end)
-end
-
--- Find the best position for an enemy unit to move to
-function TurnManager:findBestEnemyMovePosition(unit, movePositions)
-    -- Different strategies based on unit type
-    if unit.unitType == "king" then
-        -- King prioritizes safety
-        return self:findSafestPosition(unit, movePositions)
-    elseif unit.unitType == "queen" or unit.unitType == "rook" or unit.unitType == "bishop" then
-        -- Ranged units prioritize attack positions
-        return self:findBestAttackPosition(unit, movePositions)
-    elseif unit.unitType == "knight" then
-        -- Knights prioritize flanking positions
-        return self:findFlankingPosition(unit, movePositions)
+    -- Use AI to determine action
+    if self.game and self.game.enemyAI then
+        self.game.enemyAI:processTurn(unit)
     else
-        -- Pawns prioritize forward movement
-        return self:findForwardPosition(unit, movePositions)
+        -- Simple fallback AI if no AI system is available
+        self:simpleEnemyAI(unit)
     end
+    
+    -- End turn after AI processing
+    timer.after(0.5, function() self:endTurn() end)
 end
 
--- Find the safest position (furthest from enemy threats)
-function TurnManager:findSafestPosition(unit, movePositions)
-    local bestPos = nil
-    local bestSafetyScore = -math.huge
+-- Simple fallback AI
+function TurnManager:simpleEnemyAI(unit)
+    -- Safety check
+    if not unit or not self.game or not self.grid then return end
     
-    for _, pos in ipairs(movePositions) do
-        local safetyScore = 0
-        
-        -- Check distance from all player units
-        for entity, _ in pairs(self.game.grid.entities) do
-            if entity.faction == "player" then
-                local distance = math.abs(pos.x - entity.x) + math.abs(pos.y - entity.y)
-                safetyScore = safetyScore + distance
-            end
-        end
-        
-        if safetyScore > bestSafetyScore then
-            bestSafetyScore = safetyScore
-            bestPos = pos
-        end
-    end
-    
-    return bestPos
-end
-
--- Find the best position for attacking
-function TurnManager:findBestAttackPosition(unit, movePositions)
-    local bestPos = nil
-    local bestAttackScore = -math.huge
-    
-    for _, pos in ipairs(movePositions) do
-        local attackScore = 0
-        
-        -- Temporarily move unit to this position to check attack options
-        local originalX, originalY = unit.x, unit.y
-        unit.x, unit.y = pos.x, pos.y
-        
-        -- Check how many player units can be attacked from this position
-        local attackTargets = unit:getValidAttackTargets()
-        attackScore = #attackTargets
-        
-        -- Add bonus for high-value targets
-        for _, target in ipairs(attackTargets) do
-            if target.entity.unitType == "king" then
-                attackScore = attackScore + 10
-            elseif target.entity.unitType == "queen" then
-                attackScore = attackScore + 5
-            elseif target.entity.unitType == "rook" or target.entity.unitType == "bishop" then
-                attackScore = attackScore + 3
-            end
-        end
-        
-        -- Move unit back
-        unit.x, unit.y = originalX, originalY
-        
-        if attackScore > bestAttackScore then
-            bestAttackScore = attackScore
-            bestPos = pos
-        end
-    end
-    
-    -- If no good attack position, find closest position to player units
-    if bestAttackScore <= 0 then
-        bestPos = nil
-        local bestDistance = math.huge
-        
-        for _, pos in ipairs(movePositions) do
-            for entity, _ in pairs(self.game.grid.entities) do
-                if entity.faction == "player" then
-                    local distance = math.abs(pos.x - entity.x) + math.abs(pos.y - entity.y)
-                    
-                    if distance < bestDistance then
-                        bestDistance = distance
-                        bestPos = pos
-                    end
-                end
-            end
-        end
-    end
-    
-    return bestPos
-end
-
--- Find a good flanking position
-function TurnManager:findFlankingPosition(unit, movePositions)
-    local bestPos = nil
-    local bestFlankScore = -math.huge
-    
-    for _, pos in ipairs(movePositions) do
-        local flankScore = 0
-        
-        -- Check if this position flanks any player units
-        for entity, _ in pairs(self.game.grid.entities) do
-            if entity.faction == "player" then
-                -- Check if there are other enemy units on the opposite side
-                local dx = entity.x - pos.x
-                local dy = entity.y - pos.y
-                local oppositeX = entity.x + dx
-                local oppositeY = entity.y + dy
-                
-                -- Check if there's an enemy at the opposite position
-                for otherEntity, _ in pairs(self.game.grid.entities) do
-                    if otherEntity.faction == "enemy" and 
-                       otherEntity ~= unit and
-                       math.abs(otherEntity.x - oppositeX) <= 1 and
-                       math.abs(otherEntity.y - oppositeY) <= 1 then
-                        flankScore = flankScore + 5
-                    end
-                end
-                
-                -- Bonus for being close to player units
-                local distance = math.abs(pos.x - entity.x) + math.abs(pos.y - entity.y)
-                if distance <= 2 then
-                    flankScore = flankScore + (3 - distance)
-                end
-            end
-        end
-        
-        if flankScore > bestFlankScore then
-            bestFlankScore = flankScore
-            bestPos = pos
-        end
-    end
-    
-    -- If no good flanking position, use attack position
-    if bestFlankScore <= 0 then
-        return self:findBestAttackPosition(unit, movePositions)
-    end
-    
-    return bestPos
-end
-
--- Find a position that advances toward player units
-function TurnManager:findForwardPosition(unit, movePositions)
-    local bestPos = nil
-    local bestScore = -math.huge
-    
-    -- Find the closest player unit
-    local closestPlayerUnit = nil
+    -- Find closest player unit
+    local closestUnit = nil
     local closestDistance = math.huge
     
-    for entity, _ in pairs(self.game.grid.entities) do
+    -- Safety check for grid
+    if not self.grid.entities then return end
+    
+    for entity, _ in pairs(self.grid.entities) do
         if entity.faction == "player" then
-            local distance = math.abs(unit.x - entity.x) + math.abs(unit.y - entity.y)
+            local dx = entity.x - unit.x
+            local dy = entity.y - unit.y
+            local distance = math.sqrt(dx * dx + dy * dy)
             
             if distance < closestDistance then
+                closestUnit = entity
                 closestDistance = distance
-                closestPlayerUnit = entity
             end
         end
     end
     
-    if not closestPlayerUnit then
-        -- No player units found, move randomly
-        return movePositions[math.random(#movePositions)]
-    end
-    
-    -- Score positions based on how much closer they get to the target
-    for _, pos in ipairs(movePositions) do
-        local newDistance = math.abs(pos.x - closestPlayerUnit.x) + math.abs(pos.y - closestPlayerUnit.y)
-        local distanceImprovement = closestDistance - newDistance
+    -- If found a player unit, move toward it
+    if closestUnit then
+        -- Simple pathfinding: move in direction of player
+        local dx = closestUnit.x - unit.x
+        local dy = closestUnit.y - unit.y
         
-        local score = distanceImprovement
+        local moveX = 0
+        local moveY = 0
         
-        -- Bonus for moving toward king
-        if closestPlayerUnit.unitType == "king" then
-            score = score + 3
+        if math.abs(dx) > math.abs(dy) then
+            moveX = dx > 0 and 1 or -1
+        else
+            moveY = dy > 0 and 1 or -1
         end
         
-        if score > bestScore then
-            bestScore = score
-            bestPos = pos
+        -- Check if move is valid
+        local newX = unit.x + moveX
+        local newY = unit.y + moveY
+        
+        -- Safety check for grid
+        if self.grid.isValidPosition and self.grid:isValidPosition(newX, newY) then
+            -- Move unit
+            self.grid:moveEntity(unit, newX, newY)
         end
     end
-    
-    return bestPos
 end
 
--- Check if a unit has status effects that prevent actions
-function TurnManager:hasPreventingStatusEffect(unit)
-    if not unit.statusEffects then
-        return false
-    end
+-- Check if it's currently the player's turn
+function TurnManager:isPlayerTurn()
+    return self.currentPhase == "player"
+end
+
+-- Use action points
+function TurnManager:useActionPoints(amount)
+    amount = amount or 1
     
-    for _, effect in pairs(unit.statusEffects) do
-        if effect.preventAction then
-            return true
+    if self.currentActionPoints >= amount then
+        self.currentActionPoints = self.currentActionPoints - amount
+        
+        -- Trigger action point events
+        self:triggerActionPointsChanged()
+        
+        -- Update UI
+        if self.game and self.game.ui then
+            self.game.ui:setActionPoints(self.currentActionPoints, self.maxActionPoints)
         end
+        
+        -- Auto-end turn if out of action points
+        if self.currentActionPoints <= 0 and self:isPlayerTurn() then
+            timer.after(0.5, function() self:endTurn() end)
+        end
+        
+        return true
     end
     
     return false
 end
 
--- Apply status effects based on trigger type
-function TurnManager:applyStatusEffects(unit, triggerType)
-    -- Apply unit-specific status effects
-    if unit and unit.statusEffects then
-        for id, effect in pairs(unit.statusEffects) do
-            if effect.triggerOn == triggerType then
-                -- Apply effect
-                if effect.onTrigger then
-                    effect.onTrigger(unit)
-                end
-                
-                -- Reduce duration
-                if effect.duration then
-                    effect.duration = effect.duration - 1
-                    
-                    -- Remove if duration is over
-                    if effect.duration <= 0 then
-                        if effect.onRemove then
-                            effect.onRemove(unit)
-                        end
-                        unit.statusEffects[id] = nil
-                    end
-                end
-            end
-        end
-    end
-    
-    -- Apply global status effects
-    for id, effect in pairs(self.statusEffects) do
-        if effect.triggerOn == triggerType then
-            -- Apply effect
-            if effect.onTrigger then
-                effect.onTrigger(unit)
-            end
-            
-            -- Reduce duration
-            if effect.duration then
-                effect.duration = effect.duration - 1
-                
-                -- Remove if duration is over
-                if effect.duration <= 0 then
-                    if effect.onRemove then
-                        effect.onRemove()
-                    end
-                    self.statusEffects[id] = nil
-                end
-            end
-        end
-    end
-end
-
--- Register a status effect
-function TurnManager:registerStatusEffect(id, effect)
-    self.statusEffects[id] = effect
-end
-
--- Register a unit status effect
-function TurnManager:registerUnitStatusEffect(unit, id, effect)
-    if not unit.statusEffects then
-        unit.statusEffects = {}
-    end
-    
-    unit.statusEffects[id] = effect
-end
-
--- Register a turn event
-function TurnManager:registerTurnEvent(eventType, callback)
-    if eventType == "turnStart" then
-        table.insert(self.turnStartEvents, callback)
-    elseif eventType == "turnEnd" then
-        table.insert(self.turnEndEvents, callback)
-    elseif eventType == "roundStart" then
-        table.insert(self.roundStartEvents, callback)
-    elseif eventType == "roundEnd" then
-        table.insert(self.roundEndEvents, callback)
-    elseif eventType == "actionPointChange" then
-        table.insert(self.actionPointEvents, callback)
-    end
-end
-
--- Trigger turn start events
-function TurnManager:triggerTurnStart(unit)
-    -- Call registered events
-    for _, callback in ipairs(self.turnStartEvents) do
-        callback(unit, self.turnNumber, self.roundNumber)
-    end
-    
-    -- Call main callback
-    if self.onTurnStart then
-        self.onTurnStart(unit, self.turnNumber, self.roundNumber)
-    end
-    
-    -- Call phase change callback
-    if self.onPhaseChange then
-        self.onPhaseChange(self.currentPhase)
-    end
-end
-
--- Trigger turn end events
-function TurnManager:triggerTurnEnd(unit)
-    -- Call registered events
-    for _, callback in ipairs(self.turnEndEvents) do
-        callback(unit, self.turnNumber, self.roundNumber)
-    end
-    
-    -- Call main callback
-    if self.onTurnEnd then
-        self.onTurnEnd(unit, self.turnNumber, self.roundNumber)
-    end
-end
-
--- Trigger round start events
-function TurnManager:triggerRoundStart()
-    -- Call registered events
-    for _, callback in ipairs(self.roundStartEvents) do
-        callback(self.roundNumber)
-    end
-    
-    -- Call main callback
-    if self.onRoundStart then
-        self.onRoundStart(self.roundNumber)
-    end
-end
-
--- Trigger round end events
-function TurnManager:triggerRoundEnd()
-    -- Call registered events
-    for _, callback in ipairs(self.roundEndEvents) do
-        callback(self.roundNumber)
-    end
-    
-    -- Call main callback
-    if self.onRoundEnd then
-        self.onRoundEnd(self.roundNumber)
-    end
-end
-
--- Trigger action point change events
-function TurnManager:triggerActionPointChange(oldValue, newValue)
-    -- Call registered events
-    for _, callback in ipairs(self.actionPointEvents) do
-        callback(oldValue, newValue)
-    end
-    
-    -- Call main callback
-    if self.onActionPointsChanged then
-        self.onActionPointsChanged(oldValue, newValue)
-    end
-    
-    -- Update UI
-    if self.game.ui then
-        self.game.ui:setActionPoints(newValue, self.maxActionPoints)
-    end
-end
-
--- Get current active unit
-function TurnManager:getCurrentUnit()
-    return self.initiativeOrder[self.currentInitiativeIndex]
-end
-
--- Check if it's a specific faction's turn
-function TurnManager:isPhase(phase)
-    return self.currentPhase == phase
-end
-
--- Check if it's the player's turn
-function TurnManager:isPlayerTurn()
-    return self.currentPhase == "player"
-end
-
--- Check if it's the enemy's turn
-function TurnManager:isEnemyTurn()
-    return self.currentPhase == "enemy"
-end
-
--- Skip the current unit's turn
-function TurnManager:skipTurn()
-    -- Get current unit
-    local currentUnit = self.initiativeOrder[self.currentInitiativeIndex]
-    
-    if not currentUnit then
-        return
-    end
-    
-    -- Mark unit as having acted
-    if currentUnit.hasMoved ~= nil then
-        currentUnit.hasMoved = true
-    end
-    
-    if currentUnit.hasAttacked ~= nil then
-        currentUnit.hasAttacked = true
-    end
-    
-    if currentUnit.hasUsedAbility ~= nil then
-        currentUnit.hasUsedAbility = true
-    end
-    
-    -- Show notification
-    if self.game.ui then
-        self.game.ui:showNotification(currentUnit.unitType:upper() .. " skipped turn", 1)
-    end
-    
-    -- End the turn
-    self:endTurn()
-end
-
--- Use action points
-function TurnManager:useActionPoints(amount)
-    if not self:isPlayerTurn() then
-        return false
-    end
-    
-    amount = amount or 1
-    
-    if self.currentActionPoints < amount then
-        return false
-    end
-    
-    local oldValue = self.currentActionPoints
-    self.currentActionPoints = self.currentActionPoints - amount
-    
-    -- Trigger action point change events
-    self:triggerActionPointChange(oldValue, self.currentActionPoints)
-    
-    -- End turn if out of action points
-    if self.currentActionPoints <= 0 then
-        timer.after(0.5, function()
-            self:endTurn()
-        end)
-    end
-    
-    return true
-end
-
 -- Add action points
 function TurnManager:addActionPoints(amount)
-    if not self:isPlayerTurn() then
-        return false
-    end
-    
     amount = amount or 1
     
-    local oldValue = self.currentActionPoints
     self.currentActionPoints = math.min(self.currentActionPoints + amount, self.maxActionPoints)
     
-    -- Trigger action point change events
-    self:triggerActionPointChange(oldValue, self.currentActionPoints)
+    -- Trigger action point events
+    self:triggerActionPointsChanged()
+    
+    -- Update UI
+    if self.game and self.game.ui then
+        self.game.ui:setActionPoints(self.currentActionPoints, self.maxActionPoints)
+    end
     
     return true
 end
@@ -825,56 +395,163 @@ function TurnManager:setMaxActionPoints(amount)
     self.maxActionPoints = amount
     self.currentActionPoints = math.min(self.currentActionPoints, self.maxActionPoints)
     
+    -- Trigger action point events
+    self:triggerActionPointsChanged()
+    
     -- Update UI
-    if self.game.ui then
+    if self.game and self.game.ui then
         self.game.ui:setActionPoints(self.currentActionPoints, self.maxActionPoints)
     end
 end
 
+-- Apply status effects
+function TurnManager:applyStatusEffects(unit, trigger)
+    -- Apply global status effects
+    for _, effect in ipairs(self.statusEffects) do
+        if effect.trigger == trigger then
+            effect.apply(unit)
+        end
+    end
+    
+    -- Apply unit-specific status effects
+    if unit and unit.statusEffects then
+        for _, effect in ipairs(unit.statusEffects) do
+            if effect.trigger == trigger then
+                effect.apply(unit)
+            end
+        end
+    end
+end
+
+-- Add status effect
+function TurnManager:addStatusEffect(effect)
+    table.insert(self.statusEffects, effect)
+end
+
+-- Remove status effect
+function TurnManager:removeStatusEffect(effect)
+    for i, e in ipairs(self.statusEffects) do
+        if e == effect then
+            table.remove(self.statusEffects, i)
+            return true
+        end
+    end
+    
+    return false
+end
+
 -- Save turn to history
 function TurnManager:saveTurnToHistory(unit)
-    -- Create turn record
-    local turnRecord = {
-        turnNumber = self.turnNumber,
-        roundNumber = self.roundNumber,
+    local turn = {
+        number = self.turnNumber,
+        round = self.roundNumber,
         phase = self.currentPhase,
-        unitType = unit.unitType,
-        unitFaction = unit.faction,
-        actionPoints = self.currentActionPoints,
-        -- Could add more state here for undo functionality
+        unit = unit and unit.id or nil,
+        actionPoints = self.currentActionPoints
     }
     
-    -- Add to history
-    table.insert(self.turnHistory, turnRecord)
+    table.insert(self.turnHistory, turn)
     
-    -- Trim history if too long
+    -- Limit history length
     if #self.turnHistory > self.maxHistoryLength then
         table.remove(self.turnHistory, 1)
     end
 end
 
+-- Trigger turn start events
+function TurnManager:triggerTurnStart(unit)
+    for _, event in ipairs(self.turnStartEvents) do
+        event(unit)
+    end
+    
+    if self.onTurnStart then
+        self.onTurnStart(unit)
+    end
+end
+
+-- Trigger turn end events
+function TurnManager:triggerTurnEnd(unit)
+    for _, event in ipairs(self.turnEndEvents) do
+        event(unit)
+    end
+    
+    if self.onTurnEnd then
+        self.onTurnEnd(unit)
+    end
+end
+
+-- Trigger round start events
+function TurnManager:triggerRoundStart()
+    for _, event in ipairs(self.roundStartEvents) do
+        event(self.roundNumber)
+    end
+    
+    if self.onRoundStart then
+        self.onRoundStart(self.roundNumber)
+    end
+end
+
+-- Trigger round end events
+function TurnManager:triggerRoundEnd()
+    for _, event in ipairs(self.roundEndEvents) do
+        event(self.roundNumber)
+    end
+    
+    if self.onRoundEnd then
+        self.onRoundEnd(self.roundNumber)
+    end
+end
+
+-- Trigger action points changed events
+function TurnManager:triggerActionPointsChanged()
+    for _, event in ipairs(self.actionPointEvents) do
+        event(self.currentActionPoints, self.maxActionPoints)
+    end
+    
+    if self.onActionPointsChanged then
+        self.onActionPointsChanged(self.currentActionPoints, self.maxActionPoints)
+    end
+end
+
+-- Add turn start event
+function TurnManager:addTurnStartEvent(event)
+    table.insert(self.turnStartEvents, event)
+end
+
+-- Add turn end event
+function TurnManager:addTurnEndEvent(event)
+    table.insert(self.turnEndEvents, event)
+end
+
+-- Add round start event
+function TurnManager:addRoundStartEvent(event)
+    table.insert(self.roundStartEvents, event)
+end
+
+-- Add round end event
+function TurnManager:addRoundEndEvent(event)
+    table.insert(self.roundEndEvents, event)
+end
+
+-- Add action point event
+function TurnManager:addActionPointEvent(event)
+    table.insert(self.actionPointEvents, event)
+end
+
 -- Update turn timer
 function TurnManager:update(dt)
-    -- Update turn timer if active
     if self.turnTimerActive and self.turnTimer then
         self.turnTimer = self.turnTimer - dt
+        
+        -- Update UI
+        if self.game and self.game.ui then
+            self.game.ui:setTurnTimer(self.turnTimer)
+        end
         
         -- End turn if timer expires
         if self.turnTimer <= 0 then
             self.turnTimerActive = false
-            
-            -- Show notification
-            if self.game.ui then
-                self.game.ui:showNotification("Time's up!", 1)
-            end
-            
-            -- End turn
             self:endTurn()
-        end
-        
-        -- Update UI timer if close to expiring
-        if self.turnTimer <= 5 and self.game.ui and math.floor(self.turnTimer) ~= math.floor(self.turnTimer + dt) then
-            self.game.ui:showNotification(math.ceil(self.turnTimer) .. " seconds left!", 0.5)
         end
     end
 end
@@ -884,25 +561,42 @@ function TurnManager:setTurnTimeLimit(seconds)
     self.turnTimeLimit = seconds
 end
 
--- Set game over state
-function TurnManager:setGameOver(winner)
-    self.gameOver = true
-    self.winner = winner
-    
-    -- Notify game state
-    if self.game.setGameOver then
-        self.game:setGameOver(winner)
-    end
-end
-
 -- Check if game is over
-function TurnManager:isGameOver()
-    return self.gameOver
+function TurnManager:checkGameOver()
+    -- Safety check
+    if not self.game or not self.grid or not self.grid.entities then
+        return false
+    end
+    
+    -- Count units by faction
+    local playerUnits = 0
+    local enemyUnits = 0
+    
+    for entity, _ in pairs(self.grid.entities) do
+        if entity.faction == "player" then
+            playerUnits = playerUnits + 1
+        elseif entity.faction == "enemy" then
+            enemyUnits = enemyUnits + 1
+        end
+    end
+    
+    -- Check win conditions
+    if playerUnits == 0 then
+        self.gameOver = true
+        self.winner = "enemy"
+        return true
+    elseif enemyUnits == 0 then
+        self.gameOver = true
+        self.winner = "player"
+        return true
+    end
+    
+    return false
 end
 
--- Get winner
-function TurnManager:getWinner()
-    return self.winner
+-- Set grid reference
+function TurnManager:setGrid(grid)
+    self.grid = grid
 end
 
 return TurnManager

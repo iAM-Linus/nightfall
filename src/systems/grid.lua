@@ -7,10 +7,11 @@ local bresenham = require("lib.bresenham")
 
 local Grid = class("Grid")
 
-function Grid:initialize(width, height, tileSize)
+function Grid:initialize(width, height, tileSize, game)
     self.width = width or 8
     self.height = height or 8
     self.tileSize = tileSize or 64
+    self.game = game
     
     -- Create the collision world
     self.world = bump.newWorld(tileSize)
@@ -38,6 +39,8 @@ function Grid:initialize(width, height, tileSize)
     -- Fog of war settings
     self.fogOfWar = true
     self.visibilityRange = 4
+
+    print("Grid initialized. Game reference stored:", tostring(self.game ~= nil)) -- Add confirmation
 end
 
 -- Convert grid coordinates to screen coordinates
@@ -101,50 +104,98 @@ end
 
 -- Place an entity on the grid
 function Grid:placeEntity(entity, x, y)
+    -- Add detailed logging at the start
+    print(string.format(">>> Grid:placeEntity - Attempting to place '%s' (ID: %s, Type: %s, Faction: %s) at (%d, %d)",
+          entity.name or "N/A", entity.id or "N/A", entity.unitType or "N/A", entity.faction or "N/A", x, y))
+
     if not self:isInBounds(x, y) then
-        return false
-    end
-    
-    local tile = self.tiles[y][x]
-    
-    -- Check if the tile is walkable and doesn't have an entity
-    if not tile.walkable or tile.entity then
+        print("  ERROR: Position (" .. x .. "," .. y .. ") is out of bounds (" .. self.width .. "x" .. self.height .. ").")
         return false
     end
 
-    -- Remove entity from its current position if it exists
-    if entity.x and entity.y and self:isInBounds(entity.x, entity.y) then
-        self.tiles[entity.y][entity.x].entity = nil
+    local tile = self.tiles[y][x]
+
+    -- Add check for tile existence (shouldn't fail if isInBounds works)
+    if not tile then
+        print("  ERROR: Tile object doesn't exist at target location! Grid corrupted?")
+        return false
     end
-    
+
+    -- Check walkability
+    if not tile.walkable then
+        print("  WARNING: Target tile (" .. x .. "," .. y .. ") is not walkable (Type: " .. tile.type .. "). Placing anyway for debugging, but this might be an issue.")
+        -- Decide if you want to return false here in the future:
+        -- return false
+    end
+
+    -- Check occupancy
+    if tile.entity then
+        print(string.format("  ERROR: Target tile (%d, %d) already occupied by '%s' (ID: %s).", x, y, tile.entity.name or "N/A", tile.entity.id or "N/A"))
+        return false -- Definitely return false if occupied
+    end
+
+    -- Remove entity from its current position if it exists and is on the grid
+    if entity.x and entity.y and self:isInBounds(entity.x, entity.y) then
+        local oldTile = self.tiles[entity.y][entity.x]
+        if oldTile and oldTile.entity == entity then
+            oldTile.entity = nil
+            print(string.format("  Removed entity from previous position (%d, %d)", entity.x, entity.y))
+        else
+            print(string.format("  Entity had previous coords (%d,%d) but wasn't found there in grid tile.", entity.x, entity.y))
+        end
+    else
+         print("  Entity had no valid previous position to remove from.")
+    end
+
     -- Place entity at the new position
     tile.entity = entity
     entity.x = x
     entity.y = y
-    
-    -- Add to collision world
+    print(string.format("  Set tile (%d, %d) entity to %s.", x, y, entity.id))
+
+    -- Add to collision world (add more logging here if needed)
     local screenX, screenY = self:gridToScreen(x, y)
-    
-    if self.world:hasItem(entity) then
-        self.world:move(entity, screenX, screenY)
+    if self.world then
+        if self.world:hasItem(entity) then
+            print("  Updating entity in bump world.")
+            self.world:update(entity, screenX, screenY) -- Use update if it exists
+        else
+            print("  Adding entity to bump world.")
+            self.world:add(entity, screenX, screenY, self.tileSize, self.tileSize)
+        end
     else
-        self.world:add(entity, screenX, screenY, self.tileSize, self.tileSize)
+        print("  WARNING: Bump world (self.world) not initialized in grid.")
     end
-    
+
+
     -- Add to entities list if not already there
     if not self.entities[entity] then
         self.entities[entity] = true
+        print(string.format("  Added entity %s to grid.entities. Total entities: %d", entity.id, self:countEntities()))
+    else
+         print(string.format("  Entity %s already in grid.entities. (Likely due to moving)", entity.id))
     end
 
-    -- Update entity grid
+    -- Update entity grid reference
     entity.grid = self
-    
-    -- Update visibility
-    if entity.isPlayerControlled then
-        self:updateVisibility()
-    end
-    
+
+    -- Update visibility (Deferring this might be safer initially)
+    -- print("  Deferring visibility update.")
+    -- if entity.isPlayerControlled then
+    --    self:updateVisibility()
+    -- end
+
+    print(string.format("<<< Grid:placeEntity - Succeeded placing '%s' at (%d, %d)", entity.name or entity.id, x, y))
     return true
+end
+
+-- Helper to count entities for debugging (Add this function to grid.lua)
+function Grid:countEntities()
+    local count = 0
+    for _ in pairs(self.entities or {}) do -- Add safety check for self.entities
+        count = count + 1
+    end
+    return count
 end
 
 -- Move an entity on the grid

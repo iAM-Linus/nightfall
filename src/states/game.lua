@@ -6,6 +6,7 @@ local timer = require("lib.hump.timer")
 local camera = require("lib.hump.camera")
 local Grid = require("src.systems.grid")
 local Unit = require("src.entities.unit")
+require("src.entities.unit_animation_extension")
 local ChessMovement = require("src.systems.chess_movement")
 local TurnManager = require("src.systems.turn_manager")
 local CombatSystem = require("src.systems.combat_system")
@@ -35,13 +36,32 @@ end
 
 -- Enter the game state
 function Game:enter(previous, game)
+    print("--- Game:enter START ---")
+    print("  Received Game object ID: " .. tostring(game))
+    if game and game.playerUnits then
+        print("  RECEIVED game.playerUnits: (" .. #game.playerUnits .. " units)")
+        for i, unit in ipairs(game.playerUnits) do
+             print("    Unit " .. i .. ": " .. (unit.id or "N/A") .. ", IsInstance=" .. tostring(unit and unit.isInstanceOf ~= nil))
+        end
+    else
+        print("  RECEIVED game.playerUnits: NIL or EMPTY") -- <<< IS THIS LINE PRINTING?
+    end
+
+    self.game = game -- Assign the received game object to the state's self.game
+    print("  Assigned self.game. Game object ID is now: " .. tostring(self.game))
+    if self.game and self.game.playerUnits then
+         print("  AFTER self.game assignment, self.game.playerUnits has: (" .. #self.game.playerUnits .. " units)")
+    else
+         print("  AFTER self.game assignment, self.game.playerUnits is NIL or EMPTY")
+    end
+    print("--------------------------")
     self.game = game
     
     -- Initialize camera
     gameCamera = camera()
     
     -- Initialize grid
-    grid = Grid:new(10, 10, game.config.tileSize)
+    grid = Grid:new(10, 10, game.config.tileSize, self.game)
     
     -- Store grid in game object immediately to ensure it's available
     self.grid = grid
@@ -51,6 +71,9 @@ function Game:enter(previous, game)
     specialAbilitiesSystem = SpecialAbilitiesSystem:new(game)
     turnManager = TurnManager:new(game)
     combatSystem = CombatSystem:new(game)
+    self.game.hud = require("src.ui.hud"):new(self.game)
+    self.hud = self.game.hud
+    
     
     -- Connect systems to grid
     turnManager:setGrid(grid)
@@ -66,6 +89,9 @@ function Game:enter(previous, game)
     game.turnManager = turnManager
     game.combatSystem = combatSystem
     
+    -- Check right before calling createPlayerUnits
+    print("  BEFORE calling createPlayerUnits, self.game.playerUnits has: (" .. #self.game.playerUnits .. " units)")
+
     -- Create player units
     self:createPlayerUnits()
     
@@ -73,7 +99,7 @@ function Game:enter(previous, game)
     self:createEnemyUnits()
     
     -- Initialize UI elements
-    self:initUI()
+    --self:initUI()
     
     -- Set up game state
     currentLevel = 1
@@ -261,7 +287,7 @@ end
 -- Draw all units
 function Game:drawUnits()
     -- Draw player units
-    for _, unit in ipairs(playerUnits) do
+    for _, unit in ipairs(self.playerUnits or {}) do -- Add safety check
         local tile = grid:getTile(unit.x, unit.y)
         if tile and (tile.visible or not grid.fogOfWar) then
             unit:draw()
@@ -269,7 +295,8 @@ function Game:drawUnits()
     end
     
     -- Draw enemy units
-    for _, unit in ipairs(enemyUnits) do
+    --for _, unit in ipairs(enemyUnits) do
+    for _, unit in ipairs(self.enemyUnits or {}) do -- Add safety check
         local tile = grid:getTile(unit.x, unit.y)
         if tile and (tile.visible or not grid.fogOfWar) then
             unit:draw()
@@ -307,184 +334,133 @@ function Game:drawUI(width, height)
     end
 end
 
--- Initialize UI elements
-function Game:initUI()
-    -- Create UI elements here
-    -- Create HUD
-    local HUD = require("src.ui.hud")
-    self.hud = HUD:new(self.game)
-    
-    -- Store HUD in game object for access by other components
-    self.game.ui = self.hud
-    
-    -- Set up HUD with initial game state
-    self.hud:setPlayerTurn(turnManager:isPlayerTurn())
-    self.hud:setActionPoints(turnManager.currentActionPoints, turnManager.maxActionPoints)
-    self.hud:setLevel(currentLevel)
-    
-    -- Set grid for mini-map
-    self.hud:setGrid(grid)
-    
-    -- Set help text
-    self.hud:setHelpText("WASD/Arrows: Move | Space: Select | E/Enter: End Turn | Esc: Menu")
-    
-    -- Show notification at game start
-    self.hud:showNotification("Game Started - Round 1", 3)
-    uiElements = {
-        -- Add UI elements as needed
-    }
-    
-    -- Set up UI to display turn manager info
-    if self.game and self.game.ui then
-        self.game.ui:setPlayerTurn(turnManager:isPlayerTurn())
-        self.game.ui:setActionPoints(turnManager.currentActionPoints, turnManager.maxActionPoints)
-    end
-end
-
--- Create player units
 function Game:createPlayerUnits()
-    -- Clear existing units
-    playerUnits = {}
-    
-    -- Check if units were selected in team management
+    print(">>> Game:createPlayerUnits - Starting")
+    -- Use self.playerUnits for the state instance's list
+    self.playerUnits = {} -- CLEAR the state's list first
+
+    -- Safety check for self.game
+    if not self.game then
+        print("  ERROR: self.game is nil! Cannot access passed player units.")
+        print("<<< Game:createPlayerUnits - Finished prematurely. Total self.playerUnits: 0")
+        return
+    end
+
+    -- Check the units passed via the game object
     if self.game.playerUnits and #self.game.playerUnits > 0 then
-        -- Use units selected in team management
-        for i, unitData in ipairs(self.game.playerUnits) do
-            -- Determine starting position based on index
+        print("  Found " .. #self.game.playerUnits .. " units in self.game.playerUnits.")
+
+        for i, unitInstance in ipairs(self.game.playerUnits) do
+            -- Declare position variables for this loop iteration
             local startX, startY
+
+            -- Determine starting position based on index 'i' within the selected team
+            print("  Loop iteration i = " .. i) -- Check i value
+
+            -- Assign startX and startY based on 'i' (NO 'local' keyword here)
             if i == 1 then
+                print("    Entering i == 1 block")
                 startX, startY = 2, 5
+                print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
             elseif i == 2 then
+                print("    Entering i == 2 block")
                 startX, startY = 1, 3
+                print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
             elseif i == 3 then
-                startX, startY = 1, 7
+                 print("    Entering i == 3 block")
+                 startX, startY = 1, 7
+                 print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
             elseif i == 4 then
-                startX, startY = 3, 5
+                 print("    Entering i == 4 block")
+                 startX, startY = 3, 5
+                 print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
             else
-                -- Additional units get placed in remaining positions
-                startX, startY = math.min(3, i-3), 3 + ((i-1) % 5)
-            end
-            
-            -- Map unit type to movement pattern
-            local movementPattern = "orthogonal"
-            if unitData.type == "knight" then
-                movementPattern = "knight"
-            elseif unitData.type == "rook" then
-                movementPattern = "orthogonal"
-            elseif unitData.type == "bishop" then
-                movementPattern = "diagonal"
-            elseif unitData.type == "pawn" then
-                movementPattern = "pawn"
-            elseif unitData.type == "queen" then
-                movementPattern = "queen"
+                 print("    Entering else block (i > 4)")
+                 startX = math.min(3, i - 3)
+                 startY = 3 + ((i - 1) % 5)
+                 print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
             end
 
-            -- Standardize abilities
-            local abilities = {}
-            if unitData.abilities and #unitData.abilities > 0 then
-                abilities = unitData.abilities
-            else
-                -- Default abilities based on unit type
-                if unitData.type == "queen" then
-                    abilities = {"fireball", "heal", "teleport"}
-                elseif unitData.type == "bishop" then
-                    abilities = {"heal", "healing_light"}
-                elseif unitData.type == "knight" then
-                    abilities = {"knights_charge", "feint"}
-                elseif unitData.type == "rook" then
-                    abilities = {"fireball", "shield"}
-                elseif unitData.type == "pawn" then
-                    abilities = {"strengthen"}
-                end
+            -- Check if values were assigned correctly
+            if startX == nil or startY == nil then
+                 print("    ERROR: startX or startY became nil AFTER if/else block! This is unexpected.")
+                 goto continue_loop_create -- Skip this unit if positioning failed
             end
-            
-            -- Create unit with data from team management
-            local unit = Unit:new({
-                unitType = unitData.type,
-                faction = "player",
-                isPlayerControlled = true,
-                health = unitData.stats.health or 15,
-                maxHealth = unitData.stats.health or 15,
-                attack = unitData.stats.attack or 4,
-                defense = unitData.stats.defense or 2,
-                moveRange = unitData.stats.speed and math.max(1, math.floor(unitData.stats.speed / 2)) or 2,
-                attackRange = 1,
-                movementPattern = movementPattern,
-                x = startX,
-                y = startY,
-                abilities = abilities,
-                energy = unitData.stats.energy or 10,
-                maxEnergy = unitData.stats.energy or 10,
-                -- Ability cooldown table
-                abilityCooldowns = {}
-            })
 
-            -- Set game reference for ability usage
-            unit.game = self.game
-            
-            -- Add methods for ability management if not already in Unit class
-            if not unit.getAbilityCooldown then
-                unit.getAbilityCooldown = function(self, abilityId)
-                    return self.abilityCooldowns[abilityId] or 0
+            -- Print values before format call
+            print("  DEBUG (before format): i=", i, "startX=", startX, "startY=", startY)
+            print(string.format("  Processing unit %d: ID=%s, Type=%s, TargetPos=(%d,%d)",
+                  i, unitInstance.id or "N/A", unitInstance.unitType or "N/A", startX, startY))
+
+            -- Safety check unitInstance
+             if not unitInstance or type(unitInstance) ~= "table" or not unitInstance.isInstanceOf then
+                  print("    ERROR: unitInstance is not a valid Unit object!")
+                  goto continue_loop_create -- Skip this entry
+             end
+
+            -- Update the unit's position and grid/game references
+            unitInstance.x = startX
+            unitInstance.y = startY
+            unitInstance.visualX = startX
+            unitInstance.visualY = startY
+            unitInstance.grid = self.grid -- Use self.grid from Game state
+            unitInstance.game = self.game -- Use self.game from Game state
+            print("    Setting grid and game reference...")
+
+            -- Check grid existence before placing
+            if not self.grid then
+                 print("    FATAL ERROR: self.grid is NIL right before calling placeEntity!")
+                 goto continue_loop_create
+            end
+             if not self.grid.placeEntity then
+                  print("    FATAL ERROR: self.grid does NOT have placeEntity method!")
+                  goto continue_loop_create
+             end
+            print("    Grid object exists, attempting placeEntity...")
+
+            -- Place unit on the grid
+            local placeSuccess = self.grid:placeEntity(unitInstance, startX, startY)
+            if placeSuccess then
+                print("    Successfully placed unit on grid.")
+                -- Add to the Game state's instance list
+                table.insert(self.playerUnits, unitInstance)
+                print("    Added unit to self.playerUnits list.")
+            else
+                print("    ERROR: Failed to place unit on grid!")
+                -- Consider not adding to self.playerUnits if placement fails
+            end
+
+            -- Initialize cooldowns if needed (ensure this doesn't cause errors)
+            unitInstance.abilityCooldowns = unitInstance.abilityCooldowns or {}
+            for _, abilityId in ipairs(unitInstance.abilities or {}) do
+                if unitInstance.abilityCooldowns[abilityId] == nil then
+                    unitInstance.abilityCooldowns[abilityId] = 0
                 end
             end
-            
-            if not unit.canUseAbility then
-                unit.canUseAbility = function(self, abilityId)
-                    local ability = self.game.specialAbilitiesSystem:getAbility(abilityId)
-                    if not ability then return false end
-                    
-                    -- Check cooldown
-                    if self:getAbilityCooldown(abilityId) > 0 then
-                        return false
-                    end
-                    
-                    -- Check energy
-                    if self.energy < (ability.energyCost or 0) then
-                        return false
-                    end
-                    
-                    return true
-                end
-            end
-            
-            if not unit.useAbility then
-                unit.useAbility = function(self, abilityId, target, x, y)
-                    return self.game:useAbility(self, abilityId, target, x, y)
-                end
-            end
-            
-            -- Add unit to grid and player units list
-            grid:placeEntity(unit, startX, startY)
-            table.insert(playerUnits, unit)
-            
-            -- Apply items if available
-            if unitData.items then
-                for _, item in ipairs(unitData.items) do
-                    -- Apply item effects to unit stats
-                    if item.stats then
-                        for stat, value in pairs(item.stats) do
-                            if stat == "health" or stat == "maxHealth" then
-                                unit.health = unit.health + value
-                                unit.maxHealth = unit.maxHealth + value
-                            elseif stat == "attack" then
-                                unit.attack = unit.attack + value
-                            elseif stat == "defense" then
-                                unit.defense = unit.defense + value
-                            elseif stat == "speed" then
-                                unit.moveRange = unit.moveRange + math.max(0, math.floor(value / 2))
-                            end
-                        end
-                    end
-                end
-            end
+
+            -- Ensure HUD reference (assuming HUD is on self.game)
+            -- if not self.game.hud then
+            --     print("   WARNING: self.game.hud not found.")
+            -- end
+
+             ::continue_loop_create:: -- Label for goto
         end
+        print("  Finished processing units from team management.")
+    else
+        print("  WARNING: No player units found in self.game.playerUnits. NO DEFAULT UNITS CREATED.")
+        -- If you want a fallback to default units when starting directly into Game state:
+        -- print("  Creating default player units as fallback.")
+        -- local defaultKnight = Unit:new({ unitType="knight", faction="player", x=2, y=5, grid=self.grid, game=self.game })
+        -- if self.grid:placeEntity(defaultKnight, 2, 5) then
+        --     table.insert(self.playerUnits, defaultKnight)
+        --     print("    Added default knight to self.playerUnits.")
+        -- else
+        --     print("    ERROR: Failed to place default knight.")
+        -- end
+        -- -- Add more default units if needed...
     end
-    
-    -- Set grid reference for each unit
-    for _, unit in ipairs(playerUnits) do
-        unit.grid = grid
-    end
+
+    print("<<< Game:createPlayerUnits - Finished. Total self.playerUnits: " .. #self.playerUnits)
 end
 
 -- Create enemy units
@@ -563,7 +539,7 @@ function Game:handleRoundStart(roundNumber)
 
     -- Show notification
     if self.hud then
-        self.hud:showNotification("Round " .. roundNumber .. " Started", 2)
+        self.hud:showNotification(("Round " .. roundNumber .. " Started"), 2)
     end
 end
 
@@ -613,7 +589,7 @@ function Game:handleTurnEnd(unit)
 
         -- Update HUD tp clear selected unit
         if self.hud then
-            self.hud:setSelectedUnit(nil)
+            self.hud:setUnitInfo(nil)
         end
     end
     
@@ -651,67 +627,92 @@ function Game:selectUnit(unit)
     
     -- Update UI
     if self.game and self.hud then
-        self.hud:setSelectedUnit(unit)
+        self.hud:setUnitInfo(unit, false)
     end
 end
 
 -- Move the selected unit
 function Game:moveSelectedUnit(x, y)
+    print(string.format(">>> Game:moveSelectedUnit - Attempting move to (%d,%d)", x, y)) -- Add log
+
     -- Check if there's a selected unit and it's the player's turn
-    if not selectedUnit or not turnManager:isPlayerTurn() then
-        return false
-    end
-    
-    -- Check if the unit has already moved
+    if not selectedUnit then print("  Cannot move: No unit selected."); return false end
+    if not turnManager then print("  Cannot move: turnManager is nil."); return false end
+    if not turnManager:isPlayerTurn() then print("  Cannot move: Not player turn."); return false end
+
+    -- Check if the unit has already moved (using the correct property)
     if selectedUnit.hasMoved then
-        print("Unit has already moved this turn")
+        print("  Cannot move: Unit has already moved this turn.")
+        if self.hud then self.hud:showNotification("Unit has already moved!", 1.5) end
         return false
     end
-    
-    -- Check if the move is valid
+
+    -- Check if the move is valid (using the Game state's validMoves)
     local isValidMove = false
-    for _, move in ipairs(validMoves) do
+    for _, move in ipairs(validMoves or {}) do -- Add safety check for validMoves
         if move.x == x and move.y == y then
             isValidMove = true
             break
         end
     end
-    
+
     if not isValidMove then
-        print("Invalid move")
+        print("  Cannot move: Invalid move position.")
+        if self.hud then self.hud:showNotification("Invalid move!", 1.5) end
         return false
     end
-    
+
     -- Check if there's enough action points
-    if not turnManager:useActionPoints(1) then
-        print("Not enough action points")
+    local moveCost = 1 -- Assuming move costs 1 AP
+    if turnManager.currentActionPoints < moveCost then
+        print("  Cannot move: Not enough action points.")
+        if self.hud then self.hud:showNotification("Not enough action points!", 1.5) end
         return false
     end
-    
-    if grid:getEntityAt(selectedUnit.x, selectedUnit.y) ~= nil then
-        -- Remove from current position
-        grid:removeEntity(selectedUnit)
+
+    -- *** <<< FIX: Delegate movement to the Unit, don't change coords directly >>> ***
+    print(string.format("  Calling selectedUnit:moveTo(%d, %d)", x, y))
+    local moveSuccess = selectedUnit:moveTo(x, y) -- Call the unit's (extended) moveTo method
+    -- *** <<< END FIX >>> ***
+
+    if moveSuccess then
+        print("  Move successful (Unit:moveTo returned true).")
+        -- Mark as moved (The Unit:moveTo should ideally handle this if animation starts)
+        -- Let's keep it here for now, but might move later if animation handles it
+        selectedUnit.hasMoved = true
+        print("  Marked unit as moved.")
+
+        -- Use action points
+        if not turnManager:useActionPoints(moveCost) then
+             print("  ERROR: Failed to deduct action points after successful move check?!")
+             -- This shouldn't happen based on the check above, but good to log
+        end
+
+        -- Recalculate valid moves and attacks for the *selected unit* at its new logical position
+        if selectedUnit.movementPattern and selectedUnit.stats and selectedUnit.stats.moveRange and self.grid and ChessMovement then
+            validMoves = ChessMovement.getValidMoves(selectedUnit.movementPattern, selectedUnit.x, selectedUnit.y, self.grid, selectedUnit, selectedUnit.stats.moveRange)
+            -- Potentially recalculate attacks here too if needed: validAttacks = self:getValidAttacks(selectedUnit)
+            print("  Recalculated valid moves: " .. #validMoves)
+        else
+            print("  WARNING: Could not recalculate valid moves after moving.")
+            validMoves = {}
+        end
+
+
+        -- Update visibility (might be better done after animation)
+        if self.grid then self.grid:updateVisibility() end
+
+        -- Add log entry (Optional - Unit:moveTo might add a better one)
+        -- print("Moved " .. selectedUnit.unitType .. " to " .. x .. "," .. y)
+
+        print("<<< Game:moveSelectedUnit - Success")
+        return true
+    else
+        print("  Move failed (Unit:moveTo returned false or nil).")
+        if self.hud then self.hud:showNotification("Cannot move there!", 1.5) end
+        print("<<< Game:moveSelectedUnit - Failure")
+        return false
     end
-    
-    -- Update position
-    selectedUnit.x = x
-    selectedUnit.y = y
-    
-    -- Place at new position
-    grid:placeEntity(selectedUnit, x, y)
-    
-    -- Mark as moved
-    selectedUnit.hasMoved = true
-    
-    -- Recalculate valid moves
-    validMoves = ChessMovement:getValidMoves(selectedUnit, grid)
-    
-    -- Update visibility
-    grid:updateVisibility()
-    
-    print("Moved " .. selectedUnit.unitType .. " to " .. x .. "," .. y)
-    
-    return true
 end
 
 -- Check if a unit can attack another unit
@@ -993,12 +994,12 @@ function Game:mousepressed(x, y, button)
 
     -- If an ability is selected, try to use it on the clicked target
     if self.hud and selectedUnit then
-        local selectedAbility = self.hud:getSelectedAbility()
+        local selectedAbility = self.hud.abilityPanel:getSelectedAbility()
         if selectedAbility then
             local targetEntity = grid:getEntityAt(gridX, gridY)
 
             -- Attempt to use the ability
-            if self.hud:useSelectedAbility(targetEntity, gridX, gridY) then
+            if self.hud.abilityPanel:useSelectedAbility(targetEntity, gridX, gridY) then
                 -- Update visibility after ability use
                 grid:updateVisibility()
 
@@ -1048,7 +1049,7 @@ function Game:mousepressed(x, y, button)
     -- Right click
     if button == 2 then
         -- Deselect ability if one is selected
-        if self.hud and self.hud:getSelectedAbility() then
+        if self.hud and self.hud.abilityPanel:getSelectedAbility() then
             -- Reset ability selection
             self.hud.abilityPanel.selectedSlot = nil
             return

@@ -153,22 +153,39 @@ function TurnManager:calculateInitiativeOrder()
     self.currentInitiativeIndex = 1
 
     -- DEBUGGING: Print the calculated initiative order
-    print("Initiative order calculated:")
-    for i, unit in ipairs(self.initiativeOrder) do
-        print(i .. ": " .. unit.unitType .. " (faction: " .. unit.faction .. ")")
+    print("--- TurnManager: Initiative Order Calculated ---")
+    if #self.initiativeOrder == 0 then
+        print("ERROR: Initiative order is EMPTY!")
     end
+    for i, unit in ipairs(self.initiativeOrder) do
+        local unitInfo = string.format("  %d: ID=%s, Type=%s, Faction=%s, IsInstance=%s",
+              i, unit.id or "N/A", unit.unitType or "N/A", unit.faction or "N/A", tostring(unit and unit.isInstanceOf ~= nil))
+        print(unitInfo)
+        if not unit or type(unit) ~= "table" or not unit.isInstanceOf then
+             print("    FATAL ERROR: Entry is not a valid Unit instance!")
+        end
+    end
+    print("------------------------------------------------")
 end
 
 -- Start a new turn
 function TurnManager:startTurn()
+    print(string.format(">>> TurnManager:startTurn - Turn: %d, Round: %d, Index: %d", self.turnNumber, self.roundNumber, self.currentInitiativeIndex))
     -- Get current unit
-    local currentUnit = self.initiativeOrder[self.currentInitiativeIndex]
-    
-    if not currentUnit then
-        -- End of initiative order, start new round
+    if self.currentInitiativeIndex > #self.initiativeOrder then
+        print("  Index out of bounds, ending round.")
         self:endRound()
+        return -- Exit early if index is bad
+    end
+    local currentUnit = self.initiativeOrder[self.currentInitiativeIndex]
+
+    if not currentUnit then
+        print("  ERROR: currentUnit is nil! Initiative order might be corrupt or index wrong.")
+        self:endRound() -- Attempt recovery by ending round
         return
     end
+
+    print(string.format("  Current Unit: ID=%s, Type=%s, Faction=%s", currentUnit.id or "N/A", currentUnit.unitType or "N/A", currentUnit.faction or "N/A"))
     
     -- Set current phase based on unit faction
     self.currentPhase = currentUnit.faction
@@ -225,6 +242,7 @@ function TurnManager:startTurn()
     
     -- If it's a player unit, the player will control it through input
     -- The turn will end when the player calls endTurn() or runs out of action points
+    print("<<< TurnManager:startTurn finished")
 end
 
 -- End the current turn

@@ -5,6 +5,8 @@
 local gamestate = require("lib.hump.gamestate")
 local timer = require("lib.hump.timer")
 local lurker = require("lib.lurker")
+-- Require the animation integration module
+local AnimationIntegration = require("src.systems.animation_integration")
 
 -- Import game states
 local states = {
@@ -47,6 +49,8 @@ function love.load(arg)
     
         -- Set default filter mode for pixel art
         love.graphics.setDefaultFilter("nearest", "nearest")
+
+        local animationManager = AnimationIntegration.integrateAnimationSystem(game)
         
         -- Load game states
         states.menu = require("src.states.menu")
@@ -54,9 +58,13 @@ function love.load(arg)
         states.combat = require("src.states.combat")
         states.inventory = require("src.states.inventory")
         states.gameover = require("src.states.gameover")
+
+        
         
         -- Load assets
         loadAssets()
+
+
         
         -- Initialize game state system
         gamestate.registerEvents()
@@ -66,11 +74,28 @@ end
 
 -- Update game logic
 function love.update(dt)
-    -- Update the current timer
-    timer.update(dt)
-    
+    if timer and timer.update then
+        timer.update(dt)
+    end
+
     -- Check for hot reloading changes
-    lurker.update()
+    if lurker and lurker.update then
+        lurker.update()
+    end
+
+    -- Update the Animation Manager (Check if game.animationManager exists)
+    if game and game.animationManager and game.animationManager.update then
+        game.animationManager:update(dt)
+    end
+
+    -- Update the current game state via HUMP Gamestate (This calls the active state's update)
+    if gamestate and gamestate.update then
+       -- gamestate:update(dt) -- HUMP gamestate usually hooks love.update directly
+       -- If you are manually calling the state's update, make sure it happens.
+       -- If gamestate.registerEvents() was called, this might be redundant.
+       -- Check how HUMP integrates love.update.
+       -- Let's assume HUMP handles calling the current state's update.
+    end
 end
 
 -- Draw the game

@@ -326,31 +326,52 @@ function ProceduralGeneration:selectRoomType(roomIndex, totalRooms, isBossFloor)
     return self:weightedRandomSelection(self.config.dungeon.roomTypeWeights)
 end
 
--- Generate a single room
+-- Generate a single room (MODIFIED)
 function ProceduralGeneration:generateRoom(roomType, floorNumber, difficulty)
     local room = {
         type = roomType,
         size = self:selectRoomSize(roomType),
-        grid = nil,
+        gridData = nil, -- Store final grid data if needed later
         entities = {},
         features = {},
         isCleared = false,
         isVisited = false,
-        rewards = {}
+        rewards = {},
+        enemyFormation = nil
     }
-    
-    -- Create grid based on room size
-    room.grid = self:createGrid(room.size.width, room.size.height)
-    
-    -- Add room features based on type
-    self:addRoomFeatures(room, floorNumber, difficulty)
-    
-    -- Add entities based on room type
+
+    -- *** FIX: Create a temporary grid object for generation purposes ***
+    local tempGrid = self:createGrid(room.size.width, room.size.height)
+    -- *** END FIX ***
+
+    -- Add room features based on type, passing the temporary grid
+    self:addRoomFeatures(room, floorNumber, difficulty, tempGrid) -- Pass tempGrid
+
+    -- Add entities (enemy formation data) - This was already modified correctly
     self:addRoomEntities(room, floorNumber, difficulty)
-    
-    -- Add rewards based on room type
+
+    -- Add rewards
     self:addRoomRewards(room, floorNumber, difficulty)
-    
+
+    -- *** FIX: Store the relevant grid data from the tempGrid ***
+    -- Store dimensions for the combat state.
+    -- If combat needs the detailed layout (e.g., specific wall placements),
+    -- you would copy tempGrid.cells here.
+    room.gridData = {
+        width = tempGrid.width,
+        height = tempGrid.height,
+        -- tiles = tempGrid.cells -- Uncomment if combat needs detailed layout later
+    }
+    -- *** END FIX ***
+
+    -- Add player starting position for entrance rooms
+    if room.type == "entrance" then
+        room.playerStartPosition = {
+            x = math.floor(room.size.width / 2),
+            y = room.size.height - 2
+        }
+    end
+
     return room
 end
 
@@ -393,7 +414,7 @@ function ProceduralGeneration:createGrid(width, height)
 end
 
 -- Add features to a room based on its type
-function ProceduralGeneration:addRoomFeatures(room, floorNumber, difficulty)
+function ProceduralGeneration:addRoomFeatures(room, floorNumber, difficulty, grid)
     local featureCount = 0
     
     -- Determine number of features based on room type and difficulty
@@ -420,7 +441,7 @@ function ProceduralGeneration:addRoomFeatures(room, floorNumber, difficulty)
         table.insert(room.features, feature)
         
         -- Apply feature to grid
-        self:applyFeatureToGrid(feature, room.grid)
+        self:applyFeatureToGrid(feature, grid) -- *** FIX: Pass grid ***
     end
     
     -- Add obstacles
@@ -431,27 +452,27 @@ function ProceduralGeneration:addRoomFeatures(room, floorNumber, difficulty)
         table.insert(room.features, obstacle)
         
         -- Apply obstacle to grid
-        self:applyObstacleToGrid(obstacle, room.grid)
+        self:applyObstacleToGrid(obstacle, grid) -- *** FIX: Pass grid ***
     end
     
     -- Add special features based on room type
     if room.type == "treasure" then
-        local chest = self:createSpecialFeature("chest", room)
+        local chest = self:createSpecialFeature("chest", room, grid) -- *** FIX: Pass grid ***
         table.insert(room.features, chest)
-        self:applySpecialFeatureToGrid(chest, room.grid)
+        self:applySpecialFeatureToGrid(chest, grid) -- *** FIX: Pass grid ***
     elseif room.type == "rest" then
-        local fountain = self:createSpecialFeature("healing_fountain", room)
+        local fountain = self:createSpecialFeature("healing_fountain", room, grid) -- *** FIX: Pass grid ***
         table.insert(room.features, fountain)
-        self:applySpecialFeatureToGrid(fountain, room.grid)
+        self:applySpecialFeatureToGrid(fountain, grid) -- *** FIX: Pass grid ***
     elseif room.type == "puzzle" then
         local puzzleType = self:randomSelection(self.config.puzzles.types)
-        local puzzle = self:createPuzzle(puzzleType, room, difficulty)
+        local puzzle = self:createPuzzle(puzzleType, room, difficulty, grid) -- *** FIX: Pass grid (if needed by createPuzzle) ***
         table.insert(room.features, puzzle)
-        self:applyPuzzleToGrid(puzzle, room.grid)
+        self:applyPuzzleToGrid(puzzle, grid) -- *** FIX: Pass grid ***
     elseif room.type == "shop" then
-        local shopkeeper = self:createSpecialFeature("shopkeeper", room)
+        local shopkeeper = self:createSpecialFeature("shopkeeper", room, grid) -- *** FIX: Pass grid ***
         table.insert(room.features, shopkeeper)
-        self:applySpecialFeatureToGrid(shopkeeper, room.grid)
+        self:applySpecialFeatureToGrid(shopkeeper, grid) -- *** FIX: Pass grid ***
     end
 end
 
@@ -616,7 +637,7 @@ function ProceduralGeneration:createObstacle(obstacleType, room)
 end
 
 -- Create a special feature
-function ProceduralGeneration:createSpecialFeature(featureType, room)
+function ProceduralGeneration:createSpecialFeature(featureType, room, grid)
     local feature = {
         type = featureType,
         category = "special",
@@ -676,14 +697,14 @@ function ProceduralGeneration:createSpecialFeature(featureType, room)
     end
     
     -- Place the feature in a suitable location
-    local x, y = self:findSuitableLocation(room.grid)
+    local x, y = self:findSuitableLocation(grid) -- *** FIX: Pass grid ***
     feature.position = {x = x, y = y}
     
     return feature
 end
 
 -- Create a puzzle
-function ProceduralGeneration:createPuzzle(puzzleType, room, difficulty)
+function ProceduralGeneration:createPuzzle(puzzleType, room, difficulty, grid)
     local difficultyLevel = self:weightedRandomSelection(self.config.puzzles.difficulties)
     
     local puzzle = {
@@ -825,45 +846,87 @@ function ProceduralGeneration:createPuzzle(puzzleType, room, difficulty)
     return puzzle
 end
 
--- Apply a terrain feature to the grid
+-- Apply a terrain feature to the grid (MODIFIED: Check parameter validity)
 function ProceduralGeneration:applyFeatureToGrid(feature, grid)
+    -- *** FIX: Add check for nil grid ***
+    if not grid or not grid.cells then
+        print("ERROR: applyFeatureToGrid received nil grid!")
+        return
+    end
+    -- *** END FIX ***
     for _, pos in ipairs(feature.positions) do
+        -- Check bounds using grid.width and grid.height
         if pos.x > 0 and pos.x <= grid.width and pos.y > 0 and pos.y <= grid.height then
-            grid.cells[pos.y][pos.x].type = feature.type
-            grid.cells[pos.y][pos.x].walkable = true
-            grid.cells[pos.y][pos.x].feature = feature
+            -- Check if grid.cells[pos.y] exists before indexing [pos.x]
+            if grid.cells[pos.y] then
+                grid.cells[pos.y][pos.x].type = feature.type
+                grid.cells[pos.y][pos.x].walkable = true -- Assuming terrain features are walkable
+                grid.cells[pos.y][pos.x].feature = feature
+            else
+                print("ERROR: applyFeatureToGrid - grid.cells["..pos.y.."] is nil!")
+            end
         end
     end
 end
 
--- Apply an obstacle to the grid
+-- Apply an obstacle to the grid (MODIFIED: Check parameter validity)
 function ProceduralGeneration:applyObstacleToGrid(obstacle, grid)
+    -- *** FIX: Add check for nil grid ***
+    if not grid or not grid.cells then
+        print("ERROR: applyObstacleToGrid received nil grid!")
+        return
+    end
+    -- *** END FIX ***
     for _, pos in ipairs(obstacle.positions) do
         if pos.x > 0 and pos.x <= grid.width and pos.y > 0 and pos.y <= grid.height then
-            grid.cells[pos.y][pos.x].type = obstacle.type
-            grid.cells[pos.y][pos.x].walkable = not obstacle.properties.isBlocking
-            grid.cells[pos.y][pos.x].feature = obstacle
+             if grid.cells[pos.y] then
+                grid.cells[pos.y][pos.x].type = obstacle.type
+                grid.cells[pos.y][pos.x].walkable = not obstacle.properties.isBlocking
+                grid.cells[pos.y][pos.x].feature = obstacle
+             else
+                 print("ERROR: applyObstacleToGrid - grid.cells["..pos.y.."] is nil!")
+             end
         end
     end
 end
 
--- Apply a special feature to the grid
+-- Apply a special feature to the grid (MODIFIED: Check parameter validity)
 function ProceduralGeneration:applySpecialFeatureToGrid(feature, grid)
+    -- *** FIX: Add check for nil grid ***
+    if not grid or not grid.cells then
+        print("ERROR: applySpecialFeatureToGrid received nil grid!")
+        return
+    end
+    -- *** END FIX ***
     local pos = feature.position
     if pos.x > 0 and pos.x <= grid.width and pos.y > 0 and pos.y <= grid.height then
-        grid.cells[pos.y][pos.x].type = feature.type
-        grid.cells[pos.y][pos.x].walkable = true
-        grid.cells[pos.y][pos.x].feature = feature
+         if grid.cells[pos.y] then
+            grid.cells[pos.y][pos.x].type = feature.type
+            grid.cells[pos.y][pos.x].walkable = true -- Assuming special features are on walkable tiles
+            grid.cells[pos.y][pos.x].feature = feature
+         else
+             print("ERROR: applySpecialFeatureToGrid - grid.cells["..pos.y.."] is nil!")
+         end
     end
 end
 
--- Apply a puzzle to the grid
+-- Apply a puzzle to the grid (MODIFIED: Check parameter validity)
 function ProceduralGeneration:applyPuzzleToGrid(puzzle, grid)
+    -- *** FIX: Add check for nil grid ***
+    if not grid or not grid.cells then
+        print("ERROR: applyPuzzleToGrid received nil grid!")
+        return
+    end
+    -- *** END FIX ***
     for _, pos in ipairs(puzzle.positions) do
         if pos.x > 0 and pos.x <= grid.width and pos.y > 0 and pos.y <= grid.height then
-            grid.cells[pos.y][pos.x].type = "puzzle_" .. puzzle.type
-            grid.cells[pos.y][pos.x].walkable = true
-            grid.cells[pos.y][pos.x].feature = puzzle
+             if grid.cells[pos.y] then
+                grid.cells[pos.y][pos.x].type = "puzzle_" .. puzzle.type
+                grid.cells[pos.y][pos.x].walkable = true -- Assuming puzzle elements are walkable
+                grid.cells[pos.y][pos.x].feature = puzzle
+             else
+                 print("ERROR: applyPuzzleToGrid - grid.cells["..pos.y.."] is nil!")
+             end
         end
     end
 end
@@ -914,49 +977,39 @@ function ProceduralGeneration:selectEnemyFormation(formationType)
     }
 end
 
--- Place an enemy formation in a room
+-- Place an enemy formation in a room (MODIFIED: Store data, don't create instances)
 function ProceduralGeneration:placeEnemyFormation(formation, room, floorNumber, difficulty)
     -- Calculate center position for formation
     local centerX = math.floor(room.size.width / 2)
     local centerY = math.floor(room.size.height / 3) -- Place in top third of room
-    
-    -- Place each unit in the formation
+
+    local formationData = {
+        name = formation.name,
+        type = formation.type,
+        units = {}
+    }
+
+    -- Store unit data for the formation
     for _, unitData in ipairs(formation.units) do
-        local unit = self:createEnemyUnit(unitData.type, floorNumber, difficulty)
-        
-        -- Apply boss properties if specified
-        if unitData.isBoss then
-            unit.isBoss = true
-            unit.level = unit.level + 2
-            unit.stats.health = unit.stats.health * 2
-            unit.stats.maxHealth = unit.stats.maxHealth * 2
-            unit.stats.attack = unit.stats.attack * 1.5
-            unit.stats.defense = unit.stats.defense * 1.5
-        end
-        
-        -- Apply unique properties if specified
-        if unitData.isUnique then
-            unit.isUnique = true
-            unit.name = "Shadow " .. unit.unitType:gsub("^%l", string.upper)
-            unit.level = unit.level + 3
-            unit.stats.health = unit.stats.health * 3
-            unit.stats.maxHealth = unit.stats.maxHealth * 3
-            unit.stats.attack = unit.stats.attack * 2
-            unit.stats.defense = unit.stats.defense * 2
-        end
-        
-        -- Calculate position
-        unit.x = centerX + unitData.relativeX
-        unit.y = centerY + unitData.relativeY
-        
+        local enemyUnitData = {
+            unitType = unitData.type,
+            level = floorNumber, -- Base level on floor
+            isBoss = unitData.isBoss or false,
+            isUnique = unitData.isUnique or false,
+            -- Calculate position relative to room center
+            x = centerX + unitData.relativeX,
+            y = centerY + unitData.relativeY
+        }
+        -- Note: Stats will be generated by Combat state based on type/level/difficulty
+
         -- Ensure position is within grid bounds
-        if unit.x > 0 and unit.x <= room.size.width and unit.y > 0 and unit.y <= room.size.height then
-            table.insert(room.entities, unit)
-            
-            -- Mark cell as occupied
-            room.grid.cells[unit.y][unit.x].entity = unit
+        if enemyUnitData.x > 0 and enemyUnitData.x <= room.size.width and
+           enemyUnitData.y > 0 and enemyUnitData.y <= room.size.height then
+            table.insert(formationData.units, enemyUnitData)
         end
     end
+
+    room.enemyFormation = formationData -- Store the generated formation data
 end
 
 -- Create an enemy unit
@@ -1374,26 +1427,34 @@ function ProceduralGeneration:generateConnections(rooms)
     return connections
 end
 
--- Find a suitable location in a grid
-function ProceduralGeneration:findSuitableLocation(grid)
+-- Find a suitable location in a grid (MODIFIED: Accept grid parameter)
+function ProceduralGeneration:findSuitableLocation(grid) -- Added grid parameter
+    -- *** FIX: Add check for nil grid ***
+    if not grid or not grid.cells then
+        print("ERROR: findSuitableLocation received nil grid! Returning default.")
+        return 1, 1 -- Return a default safe position
+    end
+    -- *** END FIX ***
     local attempts = 0
     local maxAttempts = 50
-    
+
     while attempts < maxAttempts do
         local x = self:randomInRange(2, grid.width - 1)
         local y = self:randomInRange(2, grid.height - 1)
-        
-        -- Check if cell is suitable (floor type and no entity or feature)
-        if grid.cells[y][x].type == "floor" and 
+
+        -- Check if cell is suitable using the passed grid object
+        -- Add checks for grid.cells[y] existence
+        if grid.cells[y] and grid.cells[y][x] and
+           grid.cells[y][x].type == "floor" and
            grid.cells[y][x].walkable and
            not grid.cells[y][x].entity and
            not grid.cells[y][x].feature then
             return x, y
         end
-        
+
         attempts = attempts + 1
     end
-    
+
     -- If no suitable location found, return center of grid
     return math.floor(grid.width / 2), math.floor(grid.height / 2)
 end

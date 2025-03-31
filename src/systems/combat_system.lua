@@ -46,189 +46,6 @@ function CombatSystem:initialize(game)
     self.combatLog = {}
     self.maxLogEntries = 50
     
-    -- Status effect definitions
-    self.statusEffects = {
-        -- Damage over time
-        burning = {
-            name = "Burning",
-            description = "Taking damage each turn",
-            icon = nil, -- Would be an image in a full implementation
-            duration = 3,
-            triggerOn = "turnStart",
-            stackable = false,
-            preventAction = false,
-            onApply = function(unit)
-                -- Visual effect when applied
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is burning!", 1.5)
-                end
-            end,
-            onTrigger = function(unit)
-                -- Deal damage each turn
-                local damage = math.ceil(unit.stats.maxHealth * 0.1)
-                self:applyDirectDamage(unit, damage, {
-                    source = "status",
-                    effect = "burning",
-                    isCritical = false,
-                    isMiss = false
-                })
-            end,
-            onRemove = function(unit)
-                -- Visual effect when removed
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is no longer burning", 1.5)
-                end
-            end
-        },
-        
-        -- Prevent action
-        stunned = {
-            name = "Stunned",
-            description = "Cannot take actions",
-            icon = nil,
-            duration = 1,
-            triggerOn = "turnStart",
-            stackable = false,
-            preventAction = true,
-            onApply = function(unit)
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is stunned!", 1.5)
-                end
-            end,
-            onTrigger = function(unit)
-                -- Already handled by turn manager's preventAction check
-            end,
-            onRemove = function(unit)
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is no longer stunned", 1.5)
-                end
-            end
-        },
-        
-        -- Stat modification
-        weakened = {
-            name = "Weakened",
-            description = "Attack reduced by 50%",
-            icon = nil,
-            duration = 2,
-            triggerOn = "turnStart",
-            stackable = false,
-            preventAction = false,
-            onApply = function(unit)
-                -- Store original attack value
-                unit.originalAttack = unit.stats.attack
-                -- Reduce attack
-                unit.stats.attack = math.ceil(unit.stats.attack * 0.5)
-                
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is weakened!", 1.5)
-                end
-            end,
-            onTrigger = function(unit)
-                -- Nothing to do on trigger
-            end,
-            onRemove = function(unit)
-                -- Restore original attack
-                if unit.originalAttack then
-                    unit.stats.attack = unit.originalAttack
-                    unit.originalAttack = nil
-                end
-                
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is no longer weakened", 1.5)
-                end
-            end
-        },
-        
-        -- Defensive buff
-        shielded = {
-            name = "Shielded",
-            description = "Damage taken reduced by 50%",
-            icon = nil,
-            duration = 2,
-            triggerOn = "turnStart",
-            stackable = false,
-            preventAction = false,
-            onApply = function(unit)
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is shielded!", 1.5)
-                end
-            end,
-            onTrigger = function(unit)
-                -- Nothing to do on trigger
-            end,
-            onRemove = function(unit)
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is no longer shielded", 1.5)
-                end
-            end
-        },
-        
-        -- Movement impairment
-        slowed = {
-            name = "Slowed",
-            description = "Movement range reduced by 1",
-            icon = nil,
-            duration = 2,
-            triggerOn = "turnStart",
-            stackable = false,
-            preventAction = false,
-            onApply = function(unit)
-                -- Store original move range
-                unit.originalMoveRange = unit.stats.moveRange
-                -- Reduce move range
-                unit.stats.moveRange = math.max(1, unit.stats.moveRange - 1)
-                
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is slowed!", 1.5)
-                end
-            end,
-            onTrigger = function(unit)
-                -- Nothing to do on trigger
-            end,
-            onRemove = function(unit)
-                -- Restore original move range
-                if unit.originalMoveRange then
-                    unit.stats.moveRange = unit.originalMoveRange
-                    unit.originalMoveRange = nil
-                end
-                
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is no longer slowed", 1.5)
-                end
-            end
-        },
-        
-        -- Healing over time
-        regenerating = {
-            name = "Regenerating",
-            description = "Recovering health each turn",
-            icon = nil,
-            duration = 3,
-            triggerOn = "turnStart",
-            stackable = false,
-            preventAction = false,
-            onApply = function(unit)
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is regenerating!", 1.5)
-                end
-            end,
-            onTrigger = function(unit)
-                -- Heal each turn
-                local healAmount = math.ceil(unit.stats.maxHealth * 0.1)
-                self:applyHealing(unit, healAmount, {
-                    source = "status",
-                    effect = "regenerating"
-                })
-            end,
-            onRemove = function(unit)
-                if self.game.ui then
-                    self.game.ui:showNotification(unit.unitType:upper() .. " is no longer regenerating", 1.5)
-                end
-            end
-        }
-    }
-    
     -- Special attack definitions
     self.specialAttacks = {
         -- King's special attack
@@ -616,6 +433,13 @@ function CombatSystem:initialize(game)
             end
         }
     }
+
+    -- Ensure access to the StatusEffectsSystem
+    if not self.game.statusEffectsSystem then
+        print("WARNING: CombatSystem requires game.statusEffectsSystem")
+        -- Optionally, load it here if not guaranteed to be present
+        self.game.statusEffectsSystem = require("src.systems.status_effects_system"):new(game)
+    end
 end
 
 -- Process an attack between two units
@@ -876,81 +700,25 @@ function CombatSystem:handleUnitDefeat(attacker, defender)
     --self.game:defeatUnit(defender)
 end
 
--- Apply a status effect to a unit
+-- Apply a status effect to a unit (Uses StatusEffectsSystem)
 function CombatSystem:applyStatusEffect(unit, effectType)
-    -- If effectType is a string, get the effect from predefined effects
-    local effect = effectType
-    if type(effectType) == "string" then
-        effect = self.statusEffects[effectType]
-        if not effect then
-            return false
-        end
+    if self.game.statusEffectsSystem then
+        return self.game.statusEffectsSystem:applyEffect(unit, effectType, unit) -- Pass source
+    else
+        print("ERROR: StatusEffectsSystem not available in CombatSystem")
+        return false
     end
-    
-    -- Initialize status effects table if needed
-    if not unit.statusEffects then
-        unit.statusEffects = {}
-    end
-    
-    -- Check if effect is already applied and not stackable
-    if not effect.stackable and unit.statusEffects[effect.name] then
-        -- Refresh duration instead
-        unit.statusEffects[effect.name].duration = effect.duration
-        return true
-    end
-    
-    -- Clone the effect to avoid modifying the template
-    local newEffect = {}
-    for k, v in pairs(effect) do
-        newEffect[k] = v
-    end
-    
-    -- Apply the effect
-    unit.statusEffects[effect.name] = newEffect
-    
-    -- Call onApply handler
-    if newEffect.onApply then
-        newEffect.onApply(unit)
-    end
-    
-    -- Register with turn manager if needed
-    if self.game.turnManager then
-        self.game.turnManager:registerUnitStatusEffect(unit, effect.name, newEffect)
-    end
-    
-    return true
 end
 
--- Try to apply a random status effect
+-- Try to apply a random status effect (Uses StatusEffectsSystem)
 function CombatSystem:tryApplyRandomStatusEffect(attacker, defender)
-    -- Different status effects based on attacker type
-    local possibleEffects = {}
-    
-    if attacker.unitType == "king" then
-        table.insert(possibleEffects, "stunned")
-    elseif attacker.unitType == "queen" then
-        table.insert(possibleEffects, "weakened")
-        table.insert(possibleEffects, "burning")
-    elseif attacker.unitType == "rook" then
-        table.insert(possibleEffects, "stunned")
-        table.insert(possibleEffects, "slowed")
-    elseif attacker.unitType == "bishop" then
-        table.insert(possibleEffects, "weakened")
-        table.insert(possibleEffects, "burning")
-    elseif attacker.unitType == "knight" then
-        table.insert(possibleEffects, "slowed")
-        table.insert(possibleEffects, "stunned")
-    elseif attacker.unitType == "pawn" then
-        table.insert(possibleEffects, "slowed")
+    if self.game.statusEffectsSystem then
+        -- Let StatusEffectsSystem handle the logic
+        return self.game.statusEffectsSystem:applyRandomNegativeEffect(defender, attacker)
+    else
+        print("ERROR: StatusEffectsSystem not available in CombatSystem")
+        return false
     end
-    
-    -- Select random effect
-    if #possibleEffects > 0 then
-        local effect = possibleEffects[math.random(#possibleEffects)]
-        return self:applyStatusEffect(defender, effect)
-    end
-    
-    return false
 end
 
 -- Use a special attack

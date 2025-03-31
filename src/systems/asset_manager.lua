@@ -172,22 +172,40 @@ end
 function AssetManager:getFont(name, size)
     size = size or 12
     local key = name .. "_" .. size
+
+    -- Attempt to load if not found
+    if not self.fonts[key] then
+        self:loadFont(name, size)
+    end
+
     return self.fonts[key] or self.defaultFont or love.graphics.getFont()
 end
 
 -- Get a sound
 function AssetManager:getSound(name)
+    -- Attempt to load if not found
+    if not self.sounds[name] then
+         self:loadSound(name)
+    end
     return self.sounds[name] or self.defaultSound
 end
 
 -- Get music
 function AssetManager:getMusic(name)
-    return self.music[name]
+    -- Attempt to load if not found
+   if not self.music[name] then
+        self:loadMusic(name)
+   end
+   return self.music[name]
 end
 
 -- Get a shader
 function AssetManager:getShader(name)
-    return self.shaders[name]
+    -- Attempt to load if not found
+   if not self.shaders[name] then
+        self:loadShader(name)
+   end
+   return self.shaders[name]
 end
 
 -- Play a sound
@@ -244,42 +262,52 @@ end
 -- Create placeholder assets for development
 function AssetManager:createPlaceholders(tileSize)
     tileSize = tileSize or 64
-    
+
+    -- Ensure default font is available for drawing text on placeholders
+    local tempFont = love.graphics.getFont() -- Store current font
+    local placeholderFont = love.graphics.newFont(12) -- Use a small default font
+    love.graphics.setFont(placeholderFont)
+
     -- Create placeholder unit images
     local unitTypes = {"pawn", "knight", "bishop", "rook", "queen", "king"}
     local unitColors = {"white", "black"}
-    
+
     for _, color in ipairs(unitColors) do
         for _, unitType in ipairs(unitTypes) do
             local canvas = love.graphics.newCanvas(tileSize, tileSize)
             love.graphics.setCanvas(canvas)
-            
+            love.graphics.clear() -- Clear canvas before drawing
+
             -- Background
             love.graphics.setColor(0.2, 0.2, 0.3, 1)
             love.graphics.rectangle("fill", 0, 0, tileSize, tileSize)
-            
+
             -- Border
-            love.graphics.setColor(color == "white" and 0.9 or 0.1, 0.9, 0.9, 1)
-            love.graphics.rectangle("line", 2, 2, tileSize-4, tileSize-4)
-            
+            local borderColor = (color == "white") and {0.9, 0.9, 0.9, 1} or {0.1, 0.1, 0.1, 1}
+            love.graphics.setColor(borderColor)
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle("line", 1, 1, tileSize-2, tileSize-2)
+            love.graphics.setLineWidth(1)
+
             -- Unit type text
-            love.graphics.setColor(color == "white" and 0.9 or 0.1, 0.9, 0.9, 1)
-            love.graphics.printf(unitType:sub(1, 1):upper(), 0, tileSize/2-10, tileSize, "center")
-            
+            love.graphics.setColor(borderColor)
+            love.graphics.printf(unitType:sub(1, 1):upper(), 0, tileSize/2 - placeholderFont:getHeight()/2, tileSize, "center")
+
             love.graphics.setCanvas()
-            
+
             -- Store the image
             self.images[color .. "_" .. unitType] = canvas
         end
     end
-    
+
     -- Create placeholder tile images
     local tileTypes = {"floor", "wall", "water", "lava", "grass"}
-    
+
     for _, tileType in ipairs(tileTypes) do
         local canvas = love.graphics.newCanvas(tileSize, tileSize)
         love.graphics.setCanvas(canvas)
-        
+        love.graphics.clear() -- Clear canvas
+
         -- Base color
         local colors = {
             floor = {0.5, 0.5, 0.5},
@@ -288,27 +316,28 @@ function AssetManager:createPlaceholders(tileSize)
             lava = {0.8, 0.2, 0.2},
             grass = {0.2, 0.7, 0.2}
         }
-        
+
         love.graphics.setColor(colors[tileType][1], colors[tileType][2], colors[tileType][3], 1)
         love.graphics.rectangle("fill", 0, 0, tileSize, tileSize)
-        
+
         -- Border
         love.graphics.setColor(0.8, 0.8, 0.8, 0.5)
         love.graphics.rectangle("line", 0, 0, tileSize, tileSize)
-        
+
         love.graphics.setCanvas()
-        
+
         -- Store the image
         self.images["tile_" .. tileType] = canvas
     end
-    
+
     -- Create UI elements
     local uiElements = {"button", "panel", "highlight", "selected"}
-    
+
     for _, element in ipairs(uiElements) do
         local canvas = love.graphics.newCanvas(tileSize, tileSize)
         love.graphics.setCanvas(canvas)
-        
+        love.graphics.clear() -- Clear canvas
+
         if element == "button" then
             love.graphics.setColor(0.3, 0.3, 0.6, 1)
             love.graphics.rectangle("fill", 0, 0, tileSize, tileSize, 8, 8)
@@ -324,27 +353,35 @@ function AssetManager:createPlaceholders(tileSize)
             love.graphics.rectangle("fill", 0, 0, tileSize, tileSize)
         elseif element == "selected" then
             love.graphics.setColor(0.2, 0.9, 0.2, 0.7)
-            love.graphics.rectangle("line", 2, 2, tileSize-4, tileSize-4, 2, 2)
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle("line", 1, 1, tileSize-2, tileSize-2, 2, 2)
             love.graphics.rectangle("line", 4, 4, tileSize-8, tileSize-8, 2, 2)
+            love.graphics.setLineWidth(1)
         end
-        
+
         love.graphics.setCanvas()
-        
+
         -- Store the image
         self.images["ui_" .. element] = canvas
     end
-    
-    -- Reset canvas
-    love.graphics.setCanvas()
-    
-    -- Set default image
-    self.defaultImage = self.images["ui_panel"]
-    
-    -- Create default font
-    self.defaultFont = love.graphics.getFont()
-    
-    -- Reset color
+
+    -- Create a default image (e.g., a simple square)
+    local defaultCanvas = love.graphics.newCanvas(tileSize, tileSize)
+    love.graphics.setCanvas(defaultCanvas)
+    love.graphics.clear()
+    love.graphics.setColor(0.5, 0.5, 0.5, 1) -- Grey square
+    love.graphics.rectangle("fill", 0, 0, tileSize, tileSize)
     love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("?", tileSize/2-5, tileSize/2-10)
+    love.graphics.setCanvas()
+    self.defaultImage = defaultCanvas
+
+    -- Reset canvas and font
+    love.graphics.setCanvas()
+    love.graphics.setFont(tempFont) -- Restore original font
+
+    print("Placeholder assets created by AssetManager.")
 end
+
 
 return AssetManager

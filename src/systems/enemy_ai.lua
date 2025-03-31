@@ -205,10 +205,28 @@ end
 
 -- Process turn for all enemy units
 function EnemyAI:processTurn(enemyUnits, playerUnits, grid)
+    -- *** DEBUGGING START (Corrected) ***
+    print("--- EnemyAI:processTurn ---")
+    print("  Received grid parameter:")
+    print("  Type:", type(grid))       -- Correct: Use the parameter 'grid'
+    print("  Value:", tostring(grid))   -- Correct: Use the parameter 'grid'
+    if grid then
+         print("  Grid Width:", tostring(grid.width))   -- Correct: Use the parameter 'grid'
+         print("  Grid Height:", tostring(grid.height))  -- Correct: Use the parameter 'grid'
+         print("  Grid TileSize:", tostring(grid.tileSize))-- Correct: Use the parameter 'grid'
+    else
+         print("  ERROR: Received grid parameter is nil!") -- Correct check on the parameter
+    end
+    print("---------------------------")
+    -- *** DEBUGGING END ***
+
     self.currentTurn = self.currentTurn + 1
     self.activeEnemies = enemyUnits
     self.playerUnits = playerUnits
     
+    print("  Calling updateThreatMap, passing grid object:", tostring(grid))
+    -- *** END DEBUG ***
+
     -- Update tactical information
     self:updateThreatMap(grid)
     self:updateOpportunityMap(grid)
@@ -304,6 +322,23 @@ end
 -- Update threat map (where player units can attack)
 function EnemyAI:updateThreatMap(grid)
     self.threatMap = {}
+
+    -- *** DEBUGGING START ***
+    print("--- AI: updateThreatMap ---")
+    print("  Inspecting grid before loops:")
+    print("  Type of grid var:", type(grid))
+    print("  Value of grid var:", tostring(grid))
+    if grid then
+        print("  grid.width:", type(grid.width), tostring(grid.width))
+        print("  grid.height:", type(grid.height), tostring(grid.height)) -- This is the critical one!
+        print("  grid.tileSize:", type(grid.tileSize), tostring(grid.tileSize))
+        -- You could add checks for other expected grid properties too
+        -- print("  grid:getTile exists?", tostring(grid.getTile))
+    else
+        print("  ERROR: The 'grid' variable is nil!")
+    end
+    print("---------------------------")
+    -- *** DEBUGGING END ***
     
     -- Initialize threat map
     for y = 1, grid.height do
@@ -361,7 +396,7 @@ function EnemyAI:updateOpportunityMap(grid)
     for y = 1, grid.height do
         for x = 1, grid.width do
             -- Skip unwalkable cells
-            if not grid.cells[y][x].walkable then
+            if not grid.tiles[y][x].walkable then
                 goto continue
             end
             
@@ -426,7 +461,7 @@ function EnemyAI:generateTacticalPlans()
                 end
             end
             
-            if typeMatches and unit.stats.actionPoints > 0 then
+            if typeMatches then -- and unit.stats.actionPoints > 0 then
                 table.insert(suitableUnits, unit)
             end
         end
@@ -449,48 +484,131 @@ function EnemyAI:generateTacticalPlans()
             
             -- For each potential target, try to form the pattern
             for _, target in ipairs(targets) do
+                -- *** NEW TARGET LOGGING - ADD THIS ***
+                print(string.format("--- generateTacticalPlans: Evaluating Target ---"))
+                print(string.format("  Pattern: %s", patternName))
+                if target then
+                    print(string.format("  Target ID: %s, Type: %s, Faction: %s",
+                          target.id or "N/A", target.unitType or "N/A", target.faction or "N/A"))
+                    print(string.format("  Target Coords: (%s, %s)", tostring(target.x), tostring(target.y)))
+                    -- Check explicitly for nil coordinates on the target
+                    if target.x == nil or target.y == nil then
+                        print("  ----> CRITICAL: TARGET UNIT HAS NIL COORDINATES! <----")
+                    end
+                else
+                    print("  ----> ERROR: Target object itself is nil! <----")
+                end
+                print(string.format("------------------------------------------------"))
+                -- *** END NEW TARGET LOGGING ***
+
+                -- Existing logging (keep this too)
+                -- print(string.format("Generating plan for target '%s' (%s) at (%s, %s)", ...))
+
                 local plan = {
                     pattern = patternName,
                     target = target,
                     units = {},
                     positions = {}
                 }
-                
+
                 -- Calculate positions for the formation
                 for _, offset in ipairs(pattern.formation) do
+                    -- *** Check target coords AGAIN just before use - ADD THIS ***
+                    if not target or target.x == nil or target.y == nil then
+                         print(string.format("  ----> ERROR: Cannot calculate position offset, target coords are nil for ID %s!", target and target.id or "N/A"))
+                         goto skip_offset -- Skip this offset calculation if target coords are bad
+                    end
+                    -- *** END Check ***
+
                     local posX = target.x + offset[1]
                     local posY = target.y + offset[2]
-                    
+
+                    -- *** Log Calculated Position - ADD THIS ***
+                    print(string.format("    Calculating plan position: Target (%s,%s) + Offset (%s,%s) -> Pos (%s,%s)",
+                          tostring(target.x), tostring(target.y),
+                          tostring(offset[1]), tostring(offset[2]),
+                          tostring(posX), tostring(posY)))
+                    -- *** END Log ***
+
                     -- Check if position is valid
-                    if posX >= 1 and posX <= self.game.grid.width and
-                       posY >= 1 and posY <= self.game.grid.height and
-                       self.game.grid.cells[posY][posX].walkable then
-                        table.insert(plan.positions, {x = posX, y = posY})
+                    -- Add check for grid dimensions being valid
+                    if not self.game or not self.game.grid or not self.game.grid.width or not self.game.grid.height then
+                         print("    ----> ERROR: Grid dimensions invalid, cannot check position validity.")
+                         goto skip_offset
                     end
+                    if posX >= 1 and posX <= self.game.grid.width and
+                       posY >= 1 and posY <= self.game.grid.height then
+                        -- Add check for grid.tiles structure being valid
+                        if not self.game.grid.tiles or not self.game.grid.tiles[posY] or not self.game.grid.tiles[posY][posX] then
+                             print(string.format("    ----> ERROR: Grid tiles structure invalid for position (%s, %s), cannot check walkability.", tostring(posX), tostring(posY)))
+                             goto skip_offset
+                        end
+                        if self.game.grid.tiles[posY][posX].walkable then
+                            print(string.format("      Position (%s, %s) is valid and walkable. Adding to plan.", posX, posY))
+                            table.insert(plan.positions, {x = posX, y = posY})
+                        else
+                             print(string.format("      Position (%s, %s) is not walkable.", posX, posY))
+                        end
+                    else
+                        print(string.format("      Position (%s, %s) is out of bounds.", posX, posY))
+                    end
+                    ::skip_offset:: -- Label for goto
                 end
-                
+
                 -- If we have enough valid positions, assign units
                 if #plan.positions >= pattern.requiredUnits then
                     -- Sort units by distance to their potential positions
                     local assignments = {}
-                    
+
                     for i, unit in ipairs(suitableUnits) do
+                        -- *** Make sure the logging here is present and correct ***
                         if i <= #plan.positions then
                             local pos = plan.positions[i]
+
+                            print(string.format("    Assigning Unit: Checking unit '%s' at (%s, %s) against plan pos (%s, %s)",
+                                unit.id or "N/A", tostring(unit.x), tostring(unit.y),
+                                tostring(pos.x), tostring(pos.y)))
+                            if unit.x == nil or unit.y == nil or pos.x == nil or pos.y == nil then
+                                print("      ----> ERROR: NIL COORDINATE DETECTED during assignment calculation! <----")
+                                -- Skip this assignment if coordinates are nil
+                                goto skip_assignment
+                            end
+
                             local distance = math.abs(unit.x - pos.x) + math.abs(unit.y - pos.y)
-                            
+                            print(string.format("      Calculated distance: %s", tostring(distance)))
+
                             table.insert(assignments, {
                                 unit = unit,
                                 position = pos,
                                 distance = distance
                             })
+                            ::skip_assignment:: -- Label for goto
                         end
                     end
-                    
+
                     -- Sort by distance
-                    table.sort(assignments, function(a, b)
-                        return a.distance < b.distance
-                    end)
+                    if #assignments > 0 then
+                        print(string.format("    Sorting %d assignments by distance...", #assignments))
+                        -- Add check before sorting
+                        for idx, assign_data in ipairs(assignments) do
+                             if type(assign_data.distance) ~= "number" then
+                                  print(string.format("      ----> ERROR: Assignment %d for unit %s has nil distance BEFORE sort!", idx, assign_data.unit.id or "N/A"))
+                             end
+                        end
+                        -- The sort itself
+                        table.sort(assignments, function(a, b)
+                            -- Add check inside sort comparison function
+                            if type(a.distance) ~= "number" or type(b.distance) ~= "number" then
+                                print(string.format("      ----> ERROR: Comparing nil distance during sort! a.dist=%s, b.dist=%s", tostring(a.distance), tostring(b.distance)))
+                                -- Handle error case: maybe return false or true consistently? Or error out?
+                                -- Returning false might avoid the crash but hide the issue. Let's keep the potential crash for now.
+                            end
+                            return a.distance < b.distance -- This is line ~429 where the error occurs
+                        end)
+                        print("    Sorting complete.")
+                    else
+                         print("    No valid assignments to sort.")
+                    end
                     
                     -- Take the first N assignments
                     for i = 1, pattern.requiredUnits do
@@ -617,7 +735,7 @@ function EnemyAI:makeRandomDecision(unit, grid)
         
         for y = math.max(1, unit.y - moveRange), math.min(grid.height, unit.y + moveRange) do
             for x = math.max(1, unit.x - moveRange), math.min(grid.width, unit.x + moveRange) do
-                if grid.cells[y][x].walkable and not grid.cells[y][x].entity then
+                if grid.tiles[y][x].walkable and not grid.tiles[y][x].entity then
                     table.insert(possibleMoves, {x = x, y = y})
                 end
             end
@@ -671,7 +789,7 @@ function EnemyAI:findBestPosition(unit, grid)
     for y = math.max(1, unit.y - moveRange), math.min(grid.height, unit.y + moveRange) do
         for x = math.max(1, unit.x - moveRange), math.min(grid.width, unit.x + moveRange) do
             -- Check if position is walkable and not occupied
-            if grid.cells[y][x].walkable and not grid.cells[y][x].entity then
+            if grid.tiles[y][x].walkable and not grid.tiles[y][x].entity then
                 local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
                 
                 -- Check if within move range

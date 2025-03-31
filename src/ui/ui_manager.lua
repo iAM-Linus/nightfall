@@ -140,15 +140,25 @@ function UIManager:setActionPoints(current, max)
     return self
 end
 
--- Set selected unit
+-- Set selected unit (MODIFIED)
 function UIManager:setSelectedUnit(unit)
-    self.hud:setSelectedUnit(unit)
+    -- *** FIX: Call setUnit on the specific HUD element ***
+    if self.hud and self.hud.elements and self.hud.elements.unitInfo and self.hud.elements.unitInfo.setUnit then
+        self.hud.elements.unitInfo:setUnit(unit)
+    else
+        print("WARNING: Could not set selected unit info in HUD.")
+    end
     return self
 end
 
--- Set target unit
+-- Set target unit (MODIFIED)
 function UIManager:setTargetUnit(unit)
-    self.hud:setTargetUnit(unit)
+    -- *** FIX: Call setUnit on the specific HUD element ***
+    if self.hud and self.hud.elements and self.hud.elements.enemyInfo and self.hud.elements.enemyInfo.setUnit then
+        self.hud.elements.enemyInfo:setUnit(unit)
+    else
+         print("WARNING: Could not set target unit info in HUD.")
+    end
     return self
 end
 
@@ -184,6 +194,20 @@ function UIManager:hideHUD()
     return self
 end
 
+-- *** ADD Show/Hide methods for Ability Panel ***
+function UIManager:showAbilityPanel()
+    print("UIManager:showAbilityPanel called") -- Log
+    if self.hud then self.hud:showAbilityPanel() end
+    return self
+end
+
+function UIManager:hideAbilityPanel()
+    print("UIManager:hideAbilityPanel called") -- Log
+    if self.hud then self.hud:hideAbilityPanel() end
+    return self
+end
+-- *** END ADDITION ***
+
 -- Handle keypresses
 function UIManager:keypressed(key)
     -- Check if dialog handles the keypress
@@ -210,24 +234,21 @@ function UIManager:keypressed(key)
     return false
 end
 
--- Handle mouse presses
+-- Handle mouse presses (MODIFIED: Return info from HUD)
 function UIManager:mousepressed(x, y, button)
-    -- Check if dialog handles the mousepress
-    if self.dialog.active and self.dialog:mousepressed(x, y, button) then
-        return true
+    -- Check dialogs/menus first (they should consume clicks fully)
+    if self.dialog.active and self.dialog:mousepressed(x, y, button) then return true end
+    if self.paused and self.pauseMenu:mousepressed(x, y, button) then return true end
+    if self.mainMenu.active and self.mainMenu:mousepressed(x, y, button) then return true end
+
+    -- Check HUD and return its result
+    if self.hud and self.hud.mousepressed then
+        local hudResult = self.hud:mousepressed(x, y, button)
+        -- Return the detailed result table or nil
+        return hudResult
     end
-    
-    -- Check if pause menu handles the mousepress
-    if self.paused and self.pauseMenu:mousepressed(x, y, button) then
-        return true
-    end
-    
-    -- Check if main menu handles the mousepress
-    if self.mainMenu.active and self.mainMenu:mousepressed(x, y, button) then
-        return true
-    end
-    
-    return false
+
+    return nil -- No UI element handled the click
 end
 
 -- Handle mouse releases

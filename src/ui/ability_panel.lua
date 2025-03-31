@@ -131,15 +131,24 @@ function AbilityPanel:updateAbilitySlots()
     print("AbilityPanel: Created " .. #self.slots .. " ability slots")
 end
 
--- Show the panel
+-- Show the panel (MODIFIED: Use tween)
 function AbilityPanel:show()
+    print("AbilityPanel: Showing")
     self.visible = true
     self.targetAlpha = 1
+    -- Optional: Add tweening for smooth appearance
+    timer.tween(0.2, self, {alpha = 1}, 'out-quad')
 end
 
--- Hide the panel
+-- Hide the panel (MODIFIED: Use tween)
 function AbilityPanel:hide()
+    print("AbilityPanel: Hiding")
     self.targetAlpha = 0
+    -- Optional: Add tweening for smooth disappearance
+    timer.tween(0.2, self, {alpha = 0}, 'out-quad', function()
+        self.visible = false
+        self.selectedSlot = nil -- Deselect ability when hiding
+    end)
 end
 
 -- Update panel state
@@ -392,35 +401,40 @@ function AbilityPanel:mousemoved(x, y)
 end
 
 
--- Handle mouse press
+-- Handle mouse press (MODIFIED: Return info, don't change state directly)
 function AbilityPanel:mousepressed(x, y, button)
     if not self.visible or not self.unit then return false end
+    if button ~= 1 then return false end
 
-    local slotSize = 64
-    local padding = 10
-    local spacing = 10
+    local slotSize = 64; local padding = 10; local spacing = 10
 
-    -- Check if an ability slot was clicked
     for i, slot in ipairs(self.slots) do
         local slotX = self.x + padding + (i-1) * (slotSize + spacing)
         local slotY = self.y + padding + 30
 
-        if x >= slotX and x <= slotX + slotSize and
-           y >= slotY and y <= slotY + slotSize then
-            -- Select this ability
-            if self.selectedSlot == i then
-                self.selectedSlot = nil
-                print("AbilityPanel: Deselected ability")
-            else
-                self.selectedSlot = i
-                print("AbilityPanel: Selected ability: " .. slot.name)
-            end
-
-            return true
+        if x >= slotX and x <= slotX + slotSize and y >= slotY and y <= slotY + slotSize then
+            -- Clicked on a slot, return info about it
+            print("AbilityPanel:mousepressed - Clicked slot " .. i)
+            return { type = "ability_slot", index = i, id = slot.id, canUse = slot.canUse }
         end
     end
 
-    return false
+    -- Check if clicked on panel background
+    if x >= self.x and x <= self.x + self.width and y >= self.y and y <= self.y + self.height then
+       print("AbilityPanel:mousepressed - Clicked panel background")
+       return { type = "ability_panel_background" } -- Indicate background click
+    end
+
+    return false -- Click was outside the panel entirely
+end
+
+-- *** ADD: Method to explicitly set the selected slot (called by Combat state) ***
+function AbilityPanel:setSelectedSlot(index)
+    if index and index >= 1 and index <= #self.slots then
+        self.selectedSlot = index
+    else
+        self.selectedSlot = nil
+    end
 end
 
 -- Get the currently selected ability

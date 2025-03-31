@@ -1,1131 +1,522 @@
--- Game State for Nightfall Chess
--- Handles the main gameplay loop, exploration, and world interaction
+-- src/states/game.lua
+-- Handles the main gameplay loop, DUNGEON EXPLORATION, and world interaction
 
 local gamestate = require("lib.hump.gamestate")
 local timer = require("lib.hump.timer")
-local camera = require("lib.hump.camera")
-local Grid = require("src.systems.grid")
-local Unit = require("src.entities.unit")
-require("src.entities.unit_animation_extension")
-local ChessMovement = require("src.systems.chess_movement")
-local TurnManager = require("src.systems.turn_manager")
-local CombatSystem = require("src.systems.combat_system")
-local SpecialAbilitiesSystem = require("src.systems.special_abilities_system")
+local Camera = require("src.systems.camera")
+local Grid = require("src.systems.grid") -- Still needed for map representation? Maybe not.
+local Unit = require("src.entities.unit") -- Needed for player party data
+-- Remove combat-specific requires if not needed for map state
+-- local ChessMovement = require("src.systems.chess_movement")
 
 local Game = {}
 
--- Game state variables
-local grid = nil
-local playerUnits = {}
-local enemyUnits = {}
-local selectedUnit = nil
-local validMoves = {}
-local currentLevel = 1
-local gameCamera = nil
-local uiElements = {}
+-- Game state variables (specific to map/exploration)
+local MAP_NODE_SIZE = 64 -- Visual size of a room node on the map
+local MAP_NODE_SPACING = 20
 
--- Game systems
-local turnManager = nil
-local combatSystem = nil
-local specialAbilitiesSystem = nil
-
--- Initialize the game state
-function Game:init()
-    -- This function is called only once when the state is first created
-end
-
--- Enter the game state
-function Game:enter(previous, game)
-    print("--- Game:enter START ---")
-    print("  Received Game object ID: " .. tostring(game))
-    if game and game.playerUnits then
-        print("  RECEIVED game.playerUnits: (" .. #game.playerUnits .. " units)")
-        for i, unit in ipairs(game.playerUnits) do
-             print("    Unit " .. i .. ": " .. (unit.id or "N/A") .. ", IsInstance=" .. tostring(unit and unit.isInstanceOf ~= nil))
-        end
-    else
-        print("  RECEIVED game.playerUnits: NIL or EMPTY") -- <<< IS THIS LINE PRINTING?
-    end
-
-    self.game = game -- Assign the received game object to the state's self.game
-    print("  Assigned self.game. Game object ID is now: " .. tostring(self.game))
-    if self.game and self.game.playerUnits then
-         print("  AFTER self.game assignment, self.game.playerUnits has: (" .. #self.game.playerUnits .. " units)")
-    else
-         print("  AFTER self.game assignment, self.game.playerUnits is NIL or EMPTY")
-    end
-    print("--------------------------")
-    self.game = game
-    
-    -- Initialize camera
-    gameCamera = camera()
-    
-    -- Initialize grid
-    grid = Grid:new(10, 10, game.config.tileSize, self.game)
-    
-    -- Store grid in game object immediately to ensure it's available
-    self.grid = grid
-    game.grid = grid
-    
-    -- Initialize game systems
-    specialAbilitiesSystem = SpecialAbilitiesSystem:new(game)
-    turnManager = TurnManager:new(game)
-    combatSystem = CombatSystem:new(game)
-    self.game.hud = require("src.ui.hud"):new(self.game)
-    self.hud = self.game.hud
-    
-    
-    -- Connect systems to grid
-    turnManager:setGrid(grid)
-    
-    -- Store systems in game object for access by other components
-    self.specialAbilitiesSystem = specialAbilitiesSystem
-    self.turnManager = turnManager
-    self.combatSystem = combatSystem
-    
-
-    -- Store references in game object for access by other components
-    game.specialAbilitiesSystem = specialAbilitiesSystem
-    game.turnManager = turnManager
-    game.combatSystem = combatSystem
-    
-    -- Check right before calling createPlayerUnits
-    print("  BEFORE calling createPlayerUnits, self.game.playerUnits has: (" .. #self.game.playerUnits .. " units)")
-
-    -- Create player units
-    self:createPlayerUnits()
-    
-    -- Create enemy units
-    self:createEnemyUnits()
-    
-    -- Initialize UI elements
-    --self:initUI()
-    
-    -- Set up game state
-    currentLevel = 1
-    selectedUnit = nil
-    validMoves = {}
-    
-    -- Update visibility
-    grid:updateVisibility()
-    
-    -- Set up turn manager callbacks
-    turnManager.onTurnStart = function(unit)
-        self:handleTurnStart(unit)
-    end
-    
-    turnManager.onTurnEnd = function(unit)
-        self:handleTurnEnd(unit)
-    end
-    
-    turnManager.onRoundStart = function(roundNumber)
-        self:handleRoundStart(roundNumber)
-    end
-    
-    turnManager.onRoundEnd = function(roundNumber)
-        self:handleRoundEnd(roundNumber)
-    end
-    
-    turnManager.onActionPointsChanged = function(current, max)
-        self:handleActionPointsChanged(current, max)
-    end
-    
-    -- DEBUGGING Check abilities
-    --self:debugAbilities()
-
-    -- Start the game
-    turnManager:startGame()
-end
-
--- Leave the game state
-function Game:leave()
-    -- Clean up resources
-    playerUnits = {}
-    enemyUnits = {}
-    validMoves = {}
-    selectedUnit = nil
-    grid = nil
-    turnManager = nil
-    combatSystem = nil
-    specialAbilitiesSystem = nil
-end
-
--- Update game logic
-function Game:update(dt)
-    -- Update timers
-    timer.update(dt)
-    
-    -- Update turn manager
-    turnManager:update(dt)
-    
-    -- Update units
-    for _, unit in ipairs(playerUnits) do
-        unit:update(dt)
-    end
-    
-    for _, unit in ipairs(enemyUnits) do
-        unit:update(dt)
-    end
-
-    -- Update HUD
-    if self.hud then
-        self.hud:update(dt)
-    end
-    
-    -- Update camera (smooth follow if there's a selected unit)
-    -- Safety check for camera and grid
-    if not gameCamera then
-        print("Warning: gameCamera not initialized in update")
-        return
-    end
-    
-    if not grid then
-        print("Warning: grid not initialized in update")
-        return
-    end
-    
-    if selectedUnit then
-        local targetX, targetY = grid:gridToScreen(selectedUnit.x, selectedUnit.y)
-        targetX = targetX + grid.tileSize / 2
-        targetY = targetY + grid.tileSize / 2
-        
-        local currentX, currentY = gameCamera:position()
-        local newX = currentX + (targetX - currentX) * dt * 5
-        local newY = currentY + (targetY - currentY) * dt * 5
-        
-        gameCamera:lookAt(newX, newY)
-    end
-    
-    -- Check for game over conditions
-    self:checkGameOver()
-end
-
--- Draw the game
-function Game:draw()
-    local width, height = love.graphics.getDimensions()
-    
-    -- Safety check for gameCamera
-    if not gameCamera then
-        print("Warning: gameCamera not initialized in draw")
-        return
-    end
-    
-    -- Apply camera transformations
-    gameCamera:attach()
-    
-    -- Safety check for grid
-    if not grid then
-        print("Warning: grid not initialized in draw")
-        gameCamera:detach()
-        return
-    end
-    
-    -- Draw grid
-    self:drawGrid()
-    
-    -- Draw units
-    self:drawUnits()
-    
-    -- Draw movement highlights
-    self:drawMovementHighlights()
-    
-    -- Draw selection highlight
-    self:drawSelectionHighlight()
-    
-    -- End camera transformations
-    gameCamera:detach()
-    
-    -- Draw UI elements (not affected by camera)
-    self:drawUI(width, height)
-end
-
--- Draw the grid
-function Game:drawGrid()
-    for y = 1, grid.height do
-        for x = 1, grid.width do
-            local tile = grid:getTile(x, y)
-            
-            -- Skip if not visible and fog of war is enabled
-            if grid.fogOfWar and not tile.visible and not tile.explored then
-                goto continue
-            end
-            
-            local screenX, screenY = grid:gridToScreen(x, y)
-            
-            -- Draw tile based on type
-            local tileColor = {
-                floor = {0.5, 0.5, 0.5},
-                wall = {0.3, 0.3, 0.3},
-                water = {0.2, 0.2, 0.8},
-                lava = {0.8, 0.2, 0.2},
-                grass = {0.2, 0.7, 0.2}
-            }
-            
-            local color = tileColor[tile.type] or {0.5, 0.5, 0.5}
-            
-            -- Apply fog of war effect
-            if grid.fogOfWar and not tile.visible and tile.explored then
-                -- Darken explored but not visible tiles
-                color[1] = color[1] * 0.5
-                color[2] = color[2] * 0.5
-                color[3] = color[3] * 0.5
-            end
-            
-            -- Draw tile
-            love.graphics.setColor(color[1], color[2], color[3], 1)
-            love.graphics.rectangle("fill", screenX, screenY, grid.tileSize, grid.tileSize)
-            
-            -- Draw tile border
-            love.graphics.setColor(0.8, 0.8, 0.8, 0.3)
-            love.graphics.rectangle("line", screenX, screenY, grid.tileSize, grid.tileSize)
-            
-            ::continue::
-        end
-    end
-end
-
--- Draw all units
-function Game:drawUnits()
-    -- Draw player units
-    for _, unit in ipairs(self.playerUnits or {}) do -- Add safety check
-        local tile = grid:getTile(unit.x, unit.y)
-        if tile and (tile.visible or not grid.fogOfWar) then
-            unit:draw()
-        end
-    end
-    
-    -- Draw enemy units
-    --for _, unit in ipairs(enemyUnits) do
-    for _, unit in ipairs(self.enemyUnits or {}) do -- Add safety check
-        local tile = grid:getTile(unit.x, unit.y)
-        if tile and (tile.visible or not grid.fogOfWar) then
-            unit:draw()
-        end
-    end
-end
-
--- Draw movement highlights
-function Game:drawMovementHighlights()
-    if selectedUnit and turnManager:isPlayerTurn() then
-        love.graphics.setColor(0.2, 0.8, 0.2, 0.3)
-        
-        for _, move in ipairs(validMoves) do
-            local screenX, screenY = grid:gridToScreen(move.x, move.y)
-            love.graphics.rectangle("fill", screenX, screenY, grid.tileSize, grid.tileSize)
-        end
-    end
-end
-
--- Draw selection highlight
-function Game:drawSelectionHighlight()
-    if selectedUnit then
-        local screenX, screenY = grid:gridToScreen(selectedUnit.x, selectedUnit.y)
-        
-        love.graphics.setColor(0.9, 0.9, 0.2, 0.7)
-        love.graphics.rectangle("line", screenX + 2, screenY + 2, grid.tileSize - 4, grid.tileSize - 4)
-        love.graphics.rectangle("line", screenX + 4, screenY + 4, grid.tileSize - 8, grid.tileSize - 8)
-    end
-end
-
--- Draw UI elements
-function Game:drawUI(width, height)
-    if self.hud then
-        self.hud:draw()
-    end
-end
-
-function Game:createPlayerUnits()
-    print(">>> Game:createPlayerUnits - Starting")
-    -- Use self.playerUnits for the state instance's list
-    self.playerUnits = {} -- CLEAR the state's list first
-
-    -- Safety check for self.game
+function Game:enter(previous, gameInstance, playerPartyData, combatResult)
+    print("--- Game:enter START (Map State) ---")
+    self.game = gameInstance
     if not self.game then
-        print("  ERROR: self.game is nil! Cannot access passed player units.")
-        print("<<< Game:createPlayerUnits - Finished prematurely. Total self.playerUnits: 0")
-        return
+        error("FATAL: Game state entered without valid game object!")
     end
 
-    -- Check the units passed via the game object
-    if self.game.playerUnits and #self.game.playerUnits > 0 then
-        print("  Found " .. #self.game.playerUnits .. " units in self.game.playerUnits.")
+    -- Get necessary systems
+    self.uiManager = self.game.uiManager
+    self.proceduralGeneration = self.game.proceduralGeneration
+    self.assetManager = self.game.assetManager -- Needed for drawing
 
-        for i, unitInstance in ipairs(self.game.playerUnits) do
-            -- Declare position variables for this loop iteration
-            local startX, startY
+    if not self.proceduralGeneration then print("WARNING: ProceduralGeneration system not found!") end
+    if not self.uiManager then print("WARNING: UIManager not found!") end
 
-            -- Determine starting position based on index 'i' within the selected team
-            print("  Loop iteration i = " .. i) -- Check i value
+    -- Initialize camera for the map view
+    self.mapCamera = Camera:new()
 
-            -- Assign startX and startY based on 'i' (NO 'local' keyword here)
-            if i == 1 then
-                print("    Entering i == 1 block")
-                startX, startY = 2, 5
-                print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
-            elseif i == 2 then
-                print("    Entering i == 2 block")
-                startX, startY = 1, 3
-                print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
-            elseif i == 3 then
-                 print("    Entering i == 3 block")
-                 startX, startY = 1, 7
-                 print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
-            elseif i == 4 then
-                 print("    Entering i == 4 block")
-                 startX, startY = 3, 5
-                 print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
-            else
-                 print("    Entering else block (i > 4)")
-                 startX = math.min(3, i - 3)
-                 startY = 3 + ((i - 1) % 5)
-                 print("    IMMEDIATELY after assignment: startX=", startX, "startY=", startY)
-            end
-
-            -- Check if values were assigned correctly
-            if startX == nil or startY == nil then
-                 print("    ERROR: startX or startY became nil AFTER if/else block! This is unexpected.")
-                 goto continue_loop_create -- Skip this unit if positioning failed
-            end
-
-            -- Print values before format call
-            print("  DEBUG (before format): i=", i, "startX=", startX, "startY=", startY)
-            print(string.format("  Processing unit %d: ID=%s, Type=%s, TargetPos=(%d,%d)",
-                  i, unitInstance.id or "N/A", unitInstance.unitType or "N/A", startX, startY))
-
-            -- Safety check unitInstance
-             if not unitInstance or type(unitInstance) ~= "table" or not unitInstance.isInstanceOf then
-                  print("    ERROR: unitInstance is not a valid Unit object!")
-                  goto continue_loop_create -- Skip this entry
-             end
-
-            -- Update the unit's position and grid/game references
-            unitInstance.x = startX
-            unitInstance.y = startY
-            unitInstance.visualX = startX
-            unitInstance.visualY = startY
-            unitInstance.grid = self.grid -- Use self.grid from Game state
-            unitInstance.game = self.game -- Use self.game from Game state
-            print("    Setting grid and game reference...")
-
-            -- Check grid existence before placing
-            if not self.grid then
-                 print("    FATAL ERROR: self.grid is NIL right before calling placeEntity!")
-                 goto continue_loop_create
-            end
-             if not self.grid.placeEntity then
-                  print("    FATAL ERROR: self.grid does NOT have placeEntity method!")
-                  goto continue_loop_create
-             end
-            print("    Grid object exists, attempting placeEntity...")
-
-            -- Place unit on the grid
-            local placeSuccess = self.grid:placeEntity(unitInstance, startX, startY)
-            if placeSuccess then
-                print("    Successfully placed unit on grid.")
-                -- Add to the Game state's instance list
-                table.insert(self.playerUnits, unitInstance)
-                print("    Added unit to self.playerUnits list.")
-            else
-                print("    ERROR: Failed to place unit on grid!")
-                -- Consider not adding to self.playerUnits if placement fails
-            end
-
-            -- Initialize cooldowns if needed (ensure this doesn't cause errors)
-            unitInstance.abilityCooldowns = unitInstance.abilityCooldowns or {}
-            for _, abilityId in ipairs(unitInstance.abilities or {}) do
-                if unitInstance.abilityCooldowns[abilityId] == nil then
-                    unitInstance.abilityCooldowns[abilityId] = 0
-                end
-            end
-
-            -- Ensure HUD reference (assuming HUD is on self.game)
-            -- if not self.game.hud then
-            --     print("   WARNING: self.game.hud not found.")
-            -- end
-
-             ::continue_loop_create:: -- Label for goto
-        end
-        print("  Finished processing units from team management.")
-    else
-        print("  WARNING: No player units found in self.game.playerUnits. NO DEFAULT UNITS CREATED.")
-        -- If you want a fallback to default units when starting directly into Game state:
-        -- print("  Creating default player units as fallback.")
-        -- local defaultKnight = Unit:new({ unitType="knight", faction="player", x=2, y=5, grid=self.grid, game=self.game })
-        -- if self.grid:placeEntity(defaultKnight, 2, 5) then
-        --     table.insert(self.playerUnits, defaultKnight)
-        --     print("    Added default knight to self.playerUnits.")
-        -- else
-        --     print("    ERROR: Failed to place default knight.")
-        -- end
-        -- -- Add more default units if needed...
-    end
-
-    print("<<< Game:createPlayerUnits - Finished. Total self.playerUnits: " .. #self.playerUnits)
-end
-
--- Create enemy units
-function Game:createEnemyUnits()
-    -- Clear existing units
-    enemyUnits = {}
-    
-    -- Create pawn
-    local pawn1 = Unit:new({
-        unitType = "pawn",
-        faction = "enemy",
-        isPlayerControlled = false,
-        health = 10,
-        maxHealth = 10,
-        attack = 2,
-        defense = 1,
-        moveRange = 1,
-        attackRange = 1,
-        movementPattern = "pawn",
-        x = 8,
-        y = 3
-    })
-    
-    -- Create another pawn
-    local pawn2 = Unit:new({
-        unitType = "pawn",
-        faction = "enemy",
-        isPlayerControlled = false,
-        health = 10,
-        maxHealth = 10,
-        attack = 2,
-        defense = 1,
-        moveRange = 1,
-        attackRange = 1,
-        movementPattern = "pawn",
-        x = 8,
-        y = 7
-    })
-    
-    -- Create knight
-    local knight = Unit:new({
-        unitType = "knight",
-        faction = "enemy",
-        isPlayerControlled = false,
-        health = 15,
-        maxHealth = 15,
-        attack = 4,
-        defense = 2,
-        moveRange = 2,
-        attackRange = 1,
-        movementPattern = "knight",
-        x = 9,
-        y = 5
-    })
-    
-    -- Add units to grid and enemy units list
-    grid:placeEntity(pawn1, pawn1.x, pawn1.y)
-    grid:placeEntity(pawn2, pawn2.x, pawn2.y)
-    grid:placeEntity(knight, knight.x, knight.y)
-    
-    table.insert(enemyUnits, pawn1)
-    table.insert(enemyUnits, pawn2)
-    table.insert(enemyUnits, knight)
-    
-    -- Set grid reference for each unit
-    for _, unit in ipairs(enemyUnits) do
-        unit.grid = grid
-    end
-end
-
--- Handle round start event
-function Game:handleRoundStart(roundNumber)
-    print("Round " .. roundNumber .. " started")
-    -- Update visibility
-    grid:updateVisibility()
-
-    -- Show notification
-    if self.hud then
-        self.hud:showNotification(("Round " .. roundNumber .. " Started"), 2)
-    end
-end
-
--- Handle round end event
-function Game:handleRoundEnd(roundNumber)
-    print("Round " .. roundNumber .. " ended")
-
-    -- Show notification
-    if self.hud then
-        self.hud:showNotification("Round " .. roundNumber .. " Ended", 2)
-    end
-end
-
--- Handle turn start event
-function Game:handleTurnStart(unit)
-    -- Update visibility
-    grid:updateVisibility()
-    
-    -- If it's a player unit, select it
-    if unit.faction == "player" then
-        self:selectUnit(unit)
-        print("Player unit turn started: " .. unit.unitType)
-        -- Show notification
-        if self.hud then
-            self.hud:showNotification("Player Turn: " .. unit.unitType:upper(), 2)
-        end
-    else
-        print("Enemy unit turn started: " .. unit.unitType)
-        -- Show notification
-        if self.hud then
-            self.hud:showNotification("Enemy Turn: " .. unit.unitType:upper(), 2)
-        end
-    end
-
-    -- Update HUD player turn indicator
-    if self.hud then
-        self.hud:setPlayerTurn(unit.faction == "player")
-    end
-end
-
--- Handle turn end event
-function Game:handleTurnEnd(unit)
-    -- Deselect unit if it's a player unit
-    if unit.faction == "player" and selectedUnit == unit then
-        selectedUnit = nil
-        validMoves = {}
-
-        -- Update HUD tp clear selected unit
-        if self.hud then
-            self.hud:setUnitInfo(nil)
-        end
-    end
-    
-    print("Turn ended for: " .. unit.unitType)
-end
-
--- Handle action points changed event
-function Game:handleActionPointsChanged(current, max)
-    -- Update UI to show new action points
-    print("Action points changed to " .. current .. "/" .. max)
-    
-    if self.game and self.hud then
-        self.hud:setActionPoints(current, max)
-    end
-end
-
--- Select a unit
-function Game:selectUnit(unit)
-    -- Can only select units during player turn
-    if not turnManager:isPlayerTurn() then
-        return
-    end
-    
-    -- Can only select player units
-    if unit.faction ~= "player" then
-        return
-    end
-    
-    selectedUnit = unit
-    
-    -- Calculate valid moves
-    validMoves = ChessMovement.getValidMoves(unit.movementPattern, unit.x, unit.y, grid, unit, unit.moveRange)
-    
-    print("Selected " .. unit.unitType)
-    
-    -- Update UI
-    if self.game and self.hud then
-        self.hud:setUnitInfo(unit, false)
-    end
-end
-
--- Move the selected unit
-function Game:moveSelectedUnit(x, y)
-    print(string.format(">>> Game:moveSelectedUnit - Attempting move to (%d,%d)", x, y)) -- Add log
-
-    -- Check if there's a selected unit and it's the player's turn
-    if not selectedUnit then print("  Cannot move: No unit selected."); return false end
-    if not turnManager then print("  Cannot move: turnManager is nil."); return false end
-    if not turnManager:isPlayerTurn() then print("  Cannot move: Not player turn."); return false end
-
-    -- Check if the unit has already moved (using the correct property)
-    if selectedUnit.hasMoved then
-        print("  Cannot move: Unit has already moved this turn.")
-        if self.hud then self.hud:showNotification("Unit has already moved!", 1.5) end
-        return false
-    end
-
-    -- Check if the move is valid (using the Game state's validMoves)
-    local isValidMove = false
-    for _, move in ipairs(validMoves or {}) do -- Add safety check for validMoves
-        if move.x == x and move.y == y then
-            isValidMove = true
-            break
-        end
-    end
-
-    if not isValidMove then
-        print("  Cannot move: Invalid move position.")
-        if self.hud then self.hud:showNotification("Invalid move!", 1.5) end
-        return false
-    end
-
-    -- Check if there's enough action points
-    local moveCost = 1 -- Assuming move costs 1 AP
-    if turnManager.currentActionPoints < moveCost then
-        print("  Cannot move: Not enough action points.")
-        if self.hud then self.hud:showNotification("Not enough action points!", 1.5) end
-        return false
-    end
-
-    -- *** <<< FIX: Delegate movement to the Unit, don't change coords directly >>> ***
-    print(string.format("  Calling selectedUnit:moveTo(%d, %d)", x, y))
-    local moveSuccess = selectedUnit:moveTo(x, y) -- Call the unit's (extended) moveTo method
-    -- *** <<< END FIX >>> ***
-
-    if moveSuccess then
-        print("  Move successful (Unit:moveTo returned true).")
-        -- Mark as moved (The Unit:moveTo should ideally handle this if animation starts)
-        -- Let's keep it here for now, but might move later if animation handles it
-        selectedUnit.hasMoved = true
-        print("  Marked unit as moved.")
-
-        -- Use action points
-        if not turnManager:useActionPoints(moveCost) then
-             print("  ERROR: Failed to deduct action points after successful move check?!")
-             -- This shouldn't happen based on the check above, but good to log
-        end
-
-        -- Recalculate valid moves and attacks for the *selected unit* at its new logical position
-        if selectedUnit.movementPattern and selectedUnit.stats and selectedUnit.stats.moveRange and self.grid and ChessMovement then
-            validMoves = ChessMovement.getValidMoves(selectedUnit.movementPattern, selectedUnit.x, selectedUnit.y, self.grid, selectedUnit, selectedUnit.stats.moveRange)
-            -- Potentially recalculate attacks here too if needed: validAttacks = self:getValidAttacks(selectedUnit)
-            print("  Recalculated valid moves: " .. #validMoves)
+    -- Player party data
+    if playerPartyData then
+        print("  Returning from combat. Updating player party.")
+        self.playerParty = playerPartyData -- Update party with data from combat
+    elseif not self.playerParty then
+        print("  Initializing player party for the first time.")
+        -- Initialize player party only on the very first entry
+        self.playerParty = {}
+        -- Create initial player units (e.g., from Team Management or defaults)
+        -- This part needs data from Team Management state ideally
+        local initialUnitsData = self.game.playerUnits or {} -- Get data prepared by Team Management
+        if #initialUnitsData == 0 then
+             print("  WARNING: No initial player units provided by main game object. Creating defaults.")
+             -- Create some default units if none provided (for testing)
+             table.insert(self.playerParty, Unit:new({unitType = "knight", faction = "player", x=1, y=1, game=self.game}))
+             table.insert(self.playerParty, Unit:new({unitType = "rook", faction = "player", x=1, y=2, game=self.game}))
         else
-            print("  WARNING: Could not recalculate valid moves after moving.")
-            validMoves = {}
-        end
-
-
-        -- Update visibility (might be better done after animation)
-        if self.grid then self.grid:updateVisibility() end
-
-        -- Add log entry (Optional - Unit:moveTo might add a better one)
-        -- print("Moved " .. selectedUnit.unitType .. " to " .. x .. "," .. y)
-
-        print("<<< Game:moveSelectedUnit - Success")
-        return true
-    else
-        print("  Move failed (Unit:moveTo returned false or nil).")
-        if self.hud then self.hud:showNotification("Cannot move there!", 1.5) end
-        print("<<< Game:moveSelectedUnit - Failure")
-        return false
-    end
-end
-
--- Check if a unit can attack another unit
-function Game:canAttack(attacker, defender)
-    -- Check if units are on different teams
-    if attacker.faction == defender.faction then
-        return false
-    end
-    
-    -- Check if attacker has already attacked
-    if attacker.hasAttacked then
-        return false
-    end
-    
-    -- Check if defender is in attack range
-    local distance = math.abs(attacker.x - defender.x) + math.abs(attacker.y - defender.y)
-    return distance <= attacker.stats.attackRange
-end
-
--- Attack a unit
-function Game:attackUnit(attacker, defender)
-    -- Check if attack is valid
-    if not self:canAttack(attacker, defender) then
-        return false
-    end
-    
-    -- Check if there's enough action points (for player units)
-    if attacker.faction == "player" and not turnManager:useActionPoints(1) then
-        print("Not enough action points")
-        return false
-    end
-    
-    -- Process attack using combat system
-    combatSystem:processAttack(attacker, defender)
-    
-    -- Mark as attacked
-    attacker.hasAttacked = true
-
-    -- Show combat notification
-    if self.hud then
-        --self.hud:showNotification(attacker.unitType:upper() .. " dealt " .. damage .. " damage!", 1.5)
-        
-        -- Show target unit in enemy info panel
-        self.hud:setTargetUnit(defender)
-    end
-    
-    -- Check for defeat
-    if defender.stats.health <= 0 then
-        self:defeatUnit(defender)
-    end
-    
-    return true
-end
-
--- Defeat a unit
-function Game:defeatUnit(unit)
-    -- Remove from grid
-    grid:removeEntity(unit)
-    
-    -- Remove from appropriate list
-    if unit.faction == "player" then
-        for i, playerUnit in ipairs(playerUnits) do
-            if playerUnit == unit then
-                table.remove(playerUnits, i)
-                break
-            end
+             print("  Creating player party from provided data (" .. #initialUnitsData .. " units)")
+             for _, unitInstance in ipairs(initialUnitsData) do
+                 -- Ensure the instance is valid and has game reference
+                 if unitInstance and unitInstance.isInstanceOf and unitInstance:isInstanceOf(Unit) then
+                     unitInstance.game = self.game -- Ensure game reference is set
+                     table.insert(self.playerParty, unitInstance)
+                 else
+                     print("    WARNING: Skipping invalid unit data during party creation.")
+                 end
+             end
         end
     else
-        for i, enemyUnit in ipairs(enemyUnits) do
-            if enemyUnit == unit then
-                table.remove(enemyUnits, i)
-                break
+        print("  Re-entering map state, using existing player party.")
+    end
+    print("  Player Party Count: " .. #self.playerParty)
+
+
+    -- Dungeon generation (only if not already generated)
+    if not self.dungeon then
+        print("  Generating new dungeon...")
+        self.dungeon = self.proceduralGeneration:generateDungeon("normal")
+        self.currentFloorIndex = 1
+        -- Find the starting room ID
+        local startRoom = self:findRoomByType(self.currentFloorIndex, "entrance")
+        self.currentNodeId = startRoom and startRoom.id or (self.dungeon.floors[1].rooms[1].id) -- Fallback to first room
+        print("  Dungeon generated. Starting Node ID: " .. self.currentNodeId)
+    else
+        print("  Using existing dungeon.")
+    end
+
+    -- Handle combat results
+    if combatResult then
+        print("  Processing combat result: " .. combatResult)
+        if combatResult == "victory" then
+            local clearedRoom = self:findRoomById(self.lastCombatNodeId)
+            if clearedRoom then
+                clearedRoom.isCleared = true
+                print("  Marked room " .. self.lastCombatNodeId .. " as cleared.")
+                -- TODO: Grant rewards from clearedRoom.rewards
             end
+        elseif combatResult == "defeat" then
+            -- Game Over handled by combat state switching to gameover
+            print("  Player was defeated in combat.")
         end
+        self.lastCombatNodeId = nil -- Clear the last combat node ID
     end
 
-    -- Show defeat notification
-    if self.hud then
-        self.hud:showNotification(unit.unitType:upper() .. " was defeated!", 2)
-        
-        -- Clear enemy info if defeated unit was targeted
-        if self.hud.elements.enemyInfo.unit == unit then
-            self.hud:setTargetUnit(nil)
-        end
+    -- Map state variables
+    self.selectedNodeId = nil -- Which node is currently selected by player input
+    self.hoveredNodeId = nil -- Which node the mouse is over
+
+    -- Center camera initially (optional)
+    local startNode = self:findRoomById(self.currentNodeId)
+    if startNode and startNode.mapPosition then
+        self.mapCamera:setPosition(startNode.mapPosition.x - love.graphics.getWidth()/2, startNode.mapPosition.y - love.graphics.getHeight()/2, true)
     end
-    
-    print(unit.unitType .. " was defeated")
+
+    print("--- Game:enter END (Map State) ---")
 end
 
--- Use unit ability
-function Game:useAbility(unit, abilityId, target, x, y)
-    if not specialAbilitiesSystem then
-        print("Warning: specialAbilitiesSystem not initialized")
-        return false
-    end
-    
-    -- Get ability definition
-    local ability = specialAbilitiesSystem:getAbility(abilityId)
-    if not ability then
-        print("Warning: Ability " .. abilityId .. " not found")
-        return false
-    end
-    
-    -- Check if there's enough action points
-    if not turnManager:useActionPoints(ability.actionPointCost or 1) then
-        print("Not enough action points")
-        if self.hud then
-            self.hud:showNotification("Not enough action points!", 1.5)
+-- Helper function to find a room by type on a specific floor
+function Game:findRoomByType(floorIndex, roomType)
+    if not self.dungeon or not self.dungeon.floors[floorIndex] then return nil end
+    for _, room in ipairs(self.dungeon.floors[floorIndex].rooms) do
+        if room.type == roomType then
+            return room
         end
-        return false
     end
-    
-    -- Use the ability
-    local success = specialAbilitiesSystem:useAbility(unit, abilityId, target, x, y)
-    
-    if success then
-        -- Mark unit as having used an ability
-        unit.hasUsedAbility = true
-        
-        -- Show notification
-        if self.hud then
-            self.hud:showNotification(unit.unitType:upper() .. " used " .. ability.name, 2)
-        end
-        
-        -- Update visibility
-        grid:updateVisibility()
-    end
-    
-    return success
+    return nil
 end
 
--- Check for game over conditions
-function Game:checkGameOver()
-    -- Let turn manager check for game over first
-    if turnManager:checkGameOver() then
-        -- Show game over notification before switching states
-        if self.hud then
-            if turnManager.winner == "player" then
-                self.hud:showNotification("Victory! You have won!", 3)
+-- Helper function to find a room by ID
+function Game:findRoomById(roomId)
+    if not self.dungeon then return nil end
+    local floorIndex = math.floor(roomId / 100)
+    if not self.dungeon.floors[floorIndex] then return nil end
+    for _, room in ipairs(self.dungeon.floors[floorIndex].rooms) do
+        if room.id == roomId then
+            return room
+        end
+    end
+    return nil
+end
+
+-- Helper function to get connected room IDs
+function Game:getConnectedRoomIds(roomId)
+    local connectedIds = {}
+    if not self.dungeon then return connectedIds end
+    local floorIndex = math.floor(roomId / 100)
+    if not self.dungeon.floors[floorIndex] then return connectedIds end
+
+    for _, connection in ipairs(self.dungeon.floors[floorIndex].connections or {}) do
+        if connection.from == roomId then
+            table.insert(connectedIds, connection.to)
+        elseif connection.to == roomId then
+            table.insert(connectedIds, connection.from)
+        end
+    end
+    return connectedIds
+end
+
+
+function Game:leave()
+    print("--- Game:leave (Map State) ---")
+    -- No major cleanup needed for map state unless specific resources were loaded
+end
+
+function Game:update(dt)
+    timer.update(dt)
+    self.mapCamera:update(dt)
+
+    -- Handle map navigation input (simplified example)
+    -- In a real game, this would involve clicking nodes or using keys
+end
+
+function Game:draw()
+    if not self.dungeon then print("Warning: No dungeon to draw"); return end
+    if not self.mapCamera then print("Warning: mapCamera not initialized"); return end
+
+    self.mapCamera:apply()
+
+    -- Draw dungeon map for the current floor
+    self:drawDungeonMap(self.currentFloorIndex)
+
+    self.mapCamera:reset()
+
+    -- Draw Map UI elements (floor number, etc.)
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.setFont(self.game.assets.fonts.medium)
+    love.graphics.print("Floor: " .. self.currentFloorIndex, 10, 10)
+    love.graphics.print("Current Node: " .. self.currentNodeId, 10, 40)
+
+    -- Draw Tooltip for hovered node
+    if self.hoveredNodeId then
+        local room = self:findRoomById(self.hoveredNodeId)
+        if room then
+            local mx, my = love.mouse.getPosition()
+            self:drawMapTooltip(room, mx + 15, my + 15)
+        end
+    end
+end
+
+-- Draw the dungeon map visually
+function Game:drawDungeonMap(floorIndex)
+    local floor = self.dungeon.floors[floorIndex]
+    if not floor then return end
+
+    -- Calculate map bounds to center it (simple approach)
+    local minX, maxX, minY, maxY = 1000, -1000, 1000, -1000
+    for _, room in ipairs(floor.rooms) do
+        -- Assign map positions if they don't exist (simple linear layout for now)
+        if not room.mapPosition then
+             local roomIndex = room.id % 100
+             room.mapPosition = {
+                 x = (roomIndex - 1) * (MAP_NODE_SIZE + MAP_NODE_SPACING),
+                 y = 0 -- Simple horizontal layout
+             }
+        end
+        minX = math.min(minX, room.mapPosition.x)
+        maxX = math.max(maxX, room.mapPosition.x)
+        minY = math.min(minY, room.mapPosition.y)
+        maxY = math.max(maxY, room.mapPosition.y)
+    end
+    local mapWidth = maxX - minX + MAP_NODE_SIZE
+    local mapHeight = maxY - minY + MAP_NODE_SIZE
+    local mapOffsetX = (love.graphics.getWidth() - mapWidth) / 2 - minX
+    local mapOffsetY = (love.graphics.getHeight() - mapHeight) / 2 - minY
+
+
+    -- Draw connections
+    love.graphics.setLineWidth(2)
+    love.graphics.setColor(0.5, 0.5, 0.6)
+    for _, connection in ipairs(floor.connections or {}) do
+        local roomFrom = self:findRoomById(connection.from)
+        local roomTo = self:findRoomById(connection.to)
+        if roomFrom and roomTo and roomFrom.mapPosition and roomTo.mapPosition then
+            local x1 = mapOffsetX + roomFrom.mapPosition.x + MAP_NODE_SIZE / 2
+            local y1 = mapOffsetY + roomFrom.mapPosition.y + MAP_NODE_SIZE / 2
+            local x2 = mapOffsetX + roomTo.mapPosition.x + MAP_NODE_SIZE / 2
+            local y2 = mapOffsetY + roomTo.mapPosition.y + MAP_NODE_SIZE / 2
+            love.graphics.line(x1, y1, x2, y2)
+        end
+    end
+    love.graphics.setLineWidth(1)
+
+    -- Draw rooms (nodes)
+    for _, room in ipairs(floor.rooms) do
+        if room.mapPosition then
+            local nodeX = mapOffsetX + room.mapPosition.x
+            local nodeY = mapOffsetY + room.mapPosition.y
+
+            -- Node color based on type and status
+            local nodeColor = {0.4, 0.4, 0.5} -- Default grey
+            if room.type == "entrance" then nodeColor = {0.4, 0.8, 0.8}
+            elseif room.type == "combat" then nodeColor = {0.8, 0.2, 0.2}
+            elseif room.type == "treasure" then nodeColor = {0.8, 0.8, 0.2}
+            elseif room.type == "boss" then nodeColor = {0.9, 0.1, 0.1}
+            -- Add other types...
+            end
+            if room.isCleared then nodeColor = {0.2, 0.2, 0.2} end -- Dark grey for cleared
+
+            love.graphics.setColor(nodeColor)
+            love.graphics.rectangle("fill", nodeX, nodeY, MAP_NODE_SIZE, MAP_NODE_SIZE, 5, 5)
+
+            -- Highlight current node
+            if room.id == self.currentNodeId then
+                love.graphics.setColor(1, 1, 0, 0.8) -- Yellow border
+                love.graphics.setLineWidth(3)
+                love.graphics.rectangle("line", nodeX, nodeY, MAP_NODE_SIZE, MAP_NODE_SIZE, 5, 5)
+                love.graphics.setLineWidth(1)
+            -- Highlight selected node
+            elseif room.id == self.selectedNodeId then
+                 love.graphics.setColor(1, 1, 1, 0.7) -- White border
+                 love.graphics.setLineWidth(2)
+                 love.graphics.rectangle("line", nodeX, nodeY, MAP_NODE_SIZE, MAP_NODE_SIZE, 5, 5)
+                 love.graphics.setLineWidth(1)
+            -- Standard border
             else
-                self.hud:showNotification("Defeat! Game over...", 3)
+                love.graphics.setColor(0.7, 0.7, 0.8)
+                love.graphics.rectangle("line", nodeX, nodeY, MAP_NODE_SIZE, MAP_NODE_SIZE, 5, 5)
             end
+
+            -- Draw room type icon/letter
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.setFont(self.game.assets.fonts.large)
+            love.graphics.printf(room.type:sub(1, 1):upper(), nodeX, nodeY + MAP_NODE_SIZE / 2 - 18, MAP_NODE_SIZE, "center")
         end
-        
-        -- Delay game state transition to allow notification to be seen
-        timer.after(3, function()
-            if turnManager.winner == "player" then
-                print("Game over - Player victorious")
-                gamestate.switch(require("src.states.gameover"), self.game, true)
-            else
-                print("Game over - Player defeated")
-                gamestate.switch(require("src.states.gameover"), self.game, false)
-            end
-        end)
-        
-        return true
     end
-    
-    return false
 end
 
--- Handle key presses
+-- Draw map tooltip
+function Game:drawMapTooltip(room, x, y)
+    local textLines = {
+        "Room ID: " .. room.id,
+        "Type: " .. room.type:sub(1,1):upper()..room.type:sub(2),
+        "Status: " .. (room.isCleared and "Cleared" or "Uncleared"),
+        -- Add more info like potential rewards or enemies if desired
+    }
+    local maxWidth = 0
+    local font = self.game.assets.fonts.small
+    love.graphics.setFont(font)
+    for _, line in ipairs(textLines) do
+        maxWidth = math.max(maxWidth, font:getWidth(line))
+    end
+
+    local padding = 5
+    local boxWidth = maxWidth + padding * 2
+    local boxHeight = #textLines * font:getHeight() + padding * 2
+    local boxX = x
+    local boxY = y
+
+    -- Adjust position to keep on screen
+    local screenW, screenH = love.graphics.getDimensions()
+    if boxX + boxWidth > screenW then boxX = screenW - boxWidth end
+    if boxY + boxHeight > screenH then boxY = screenH - boxHeight end
+    if boxX < 0 then boxX = 0 end
+    if boxY < 0 then boxY = 0 end
+
+    -- Draw background
+    love.graphics.setColor(0.1, 0.1, 0.15, 0.9)
+    love.graphics.rectangle("fill", boxX, boxY, boxWidth, boxHeight, 3, 3)
+    love.graphics.setColor(0.5, 0.5, 0.6)
+    love.graphics.rectangle("line", boxX, boxY, boxWidth, boxHeight, 3, 3)
+
+    -- Draw text
+    love.graphics.setColor(1, 1, 1)
+    for i, line in ipairs(textLines) do
+        love.graphics.print(line, boxX + padding, boxY + padding + (i - 1) * font:getHeight())
+    end
+end
+
 function Game:keypressed(key)
-    -- Global key handlers
+    -- Global keys (like opening menu)
     if key == "escape" then
         gamestate.switch(require("src.states.menu"), self.game)
+        return
     end
-    
-    -- Only handle gameplay keys during player turn
-    if not turnManager:isPlayerTurn() then
+    if key == "m" then -- Example: Toggle map view (if implemented)
+        -- Toggle map logic
         return
     end
 
-    -- Check if HUD handled the key press
-    if self.hud and self.hud:keypressed(key) then
-        return -- HUD consumed the key press
+    -- Map Navigation Keys (Example: Using arrow keys to select adjacent nodes)
+    local currentRoom = self:findRoomById(self.currentNodeId)
+    if not currentRoom then return end
+
+    local targetNodeId = nil
+    local connectedIds = self:getConnectedRoomIds(self.currentNodeId)
+    local targetRoom = nil
+
+    -- Find the relative position of connected rooms (this needs map layout logic)
+    -- For a simple linear layout as drawn above:
+    if key == "left" then
+        if self.currentNodeId % 100 > 1 then targetNodeId = self.currentNodeId - 1 end
+    elseif key == "right" then
+         -- Check if next node exists on this floor
+         local nextRoom = self:findRoomById(self.currentNodeId + 1)
+         if nextRoom and nextRoom.floor == self.currentFloorIndex then
+             targetNodeId = self.currentNodeId + 1
+         end
+    -- Add up/down logic if map layout supports it
     end
-    
-    -- Movement keys
-    if key == "up" or key == "w" then
-        if selectedUnit then
-            local targetX, targetY = selectedUnit.x, selectedUnit.y - 1
-            self:moveSelectedUnit(targetX, targetY)
-        end
-    elseif key == "down" or key == "s" then
-        if selectedUnit then
-            local targetX, targetY = selectedUnit.x, selectedUnit.y + 1
-            self:moveSelectedUnit(targetX, targetY)
-        end
-    elseif key == "left" or key == "a" then
-        if selectedUnit then
-            local targetX, targetY = selectedUnit.x - 1, selectedUnit.y
-            self:moveSelectedUnit(targetX, targetY)
-        end
-    elseif key == "right" or key == "d" then
-        if selectedUnit then
-            local targetX, targetY = selectedUnit.x + 1, selectedUnit.y
-            self:moveSelectedUnit(targetX, targetY)
-        end
+
+    if targetNodeId then
+         -- Check if the target node is actually connected (important for non-linear maps)
+         local isConnected = false
+         for _, id in ipairs(connectedIds) do
+             if id == targetNodeId then isConnected = true; break end
+         end
+
+         if isConnected then
+             self.selectedNodeId = targetNodeId
+             print("Selected node: " .. self.selectedNodeId)
+         else
+             print("Node " .. targetNodeId .. " is not connected to current node " .. self.currentNodeId)
+         end
     end
-    
-    -- Selection and action keys
-    if key == "space" then
-        if selectedUnit then
-            -- If an ability is selected, use it on the unit's current position
-            if self.hud and self.hud:getSelectedAbility() then
-                self.hud:useSelectedAbility(nil, selectedUnit.x, selectedUnit.y)
+
+    -- Action Key (Example: Enter/Space to move to selected node)
+    if (key == "return" or key == "space") and self.selectedNodeId then
+        local targetRoom = self:findRoomById(self.selectedNodeId)
+        if targetRoom then
+            print("Attempting to enter room: " .. targetRoom.id .. " Type: " .. targetRoom.type)
+            self.currentNodeId = self.selectedNodeId
+            self.selectedNodeId = nil -- Deselect after moving
+
+            -- Handle entering the room based on type
+            if targetRoom.type == "combat" and not targetRoom.isCleared then
+                self:enterCombat(targetRoom)
+            elseif targetRoom.type == "treasure" then
+                -- Handle treasure room logic
+                print("Entered Treasure Room!")
+                targetRoom.isCleared = true -- Mark as cleared after entering
+                -- Grant rewards...
+            elseif targetRoom.type == "boss" and not targetRoom.isCleared then
+                 self:enterCombat(targetRoom) -- Boss rooms trigger combat
+            -- Add cases for other room types (shop, puzzle, rest)
             else
-                -- Deselect if already selected
-                selectedUnit = nil
-                validMoves = {}
-
-                if self.hud then
-                    self.hud:setSelectedUnit(nil)
-
+                print("Entered room type: " .. targetRoom.type)
+                -- Mark non-combat rooms as cleared upon entry? Or require interaction?
+                if targetRoom.type ~= "combat" and targetRoom.type ~= "boss" then
+                     targetRoom.isCleared = true
                 end
             end
-        else
-            -- Try to select a unit at cursor position
-            -- (This would be implemented with cursor position tracking)
-        end
-    end
-    
-    -- End turn key
-    if key == "return" or key == "e" then
-        turnManager:endTurn()
-    end
-    
-    -- Ability keys
-    if key == "1" or key == "2" or key == "3" then
-        if selectedUnit then
-            local abilityIndex = tonumber(key)
-            specialAbilitiesSystem:useAbility(selectedUnit, abilityIndex)
         end
     end
 end
 
--- Handle mouse movement
-function Game:mousemoved(x, y)
-    -- Forward mouse movement to HUD for ability tooltips
-    if self.hud then
-        self.hud:mousemoved(x, y)
-    end
-end
-
--- Handle mouse presses
 function Game:mousepressed(x, y, button)
-    -- Only handle mouse input during player turn
-    if not turnManager or not turnManager:isPlayerTurn() then
-        return
-    end
+    if button == 1 then -- Left Click
+        -- Check if a map node was clicked
+        local clickedNodeId = self:getNodeAtScreenPos(x, y)
+        if clickedNodeId then
+            local connectedIds = self:getConnectedRoomIds(self.currentNodeId)
+            local isConnected = false
+            for _, id in ipairs(connectedIds) do if id == clickedNodeId then isConnected = true; break end end
 
-    -- Check if HUD handled the input (e.g., ability panel click)
-    if self.hud and self.hud:mousepressed(x, y, button) then
-        return -- HUD consumed the click
-    end
+            if isConnected then
+                self.selectedNodeId = clickedNodeId
+                print("Selected node via click: " .. self.selectedNodeId)
 
-    -- Safety check for gameCamera
-    if not gameCamera then
-        print("Warning: gameCamera not initialized in mousepressed")
-        return
-    end
-    
-    -- Convert screen coordinates to grid coordinates
-    local worldX, worldY = gameCamera:toWorld(x, y)
-    
-    -- Safety check for grid
-    if not grid then
-        print("Warning: grid not initialized in mousepressed")
-        return
-    end
-    
-    local gridX, gridY = grid:screenToGrid(worldX, worldY)
-    
-    -- Check if coordinates are within grid bounds
-    if not grid:isInBounds(gridX, gridY) then
-        return
-    end
+                -- Double click to enter
+                local currentTime = love.timer.getTime()
+                if self.lastClickTime and currentTime - self.lastClickTime < 0.3 and self.lastClickedNodeId == clickedNodeId then
+                    local targetRoom = self:findRoomById(self.selectedNodeId)
+                    if targetRoom then
+                        print("Entering room via double click: " .. targetRoom.id .. " Type: " .. targetRoom.type)
+                        self.currentNodeId = self.selectedNodeId
+                        self.selectedNodeId = nil -- Deselect after moving
 
-    -- If an ability is selected, try to use it on the clicked target
-    if self.hud and selectedUnit then
-        local selectedAbility = self.hud.abilityPanel:getSelectedAbility()
-        if selectedAbility then
-            local targetEntity = grid:getEntityAt(gridX, gridY)
-
-            -- Attempt to use the ability
-            if self.hud.abilityPanel:useSelectedAbility(targetEntity, gridX, gridY) then
-                -- Update visibility after ability use
-                grid:updateVisibility()
-
-                -- Recalculate valid moves
-                if selectedUnit then
-                    validMoves = ChessMovement:getValidMoves(selectedUnit.x, selectedUnit.y, grid, selectedUnit, selectedUnit.stats.moveRange)
+                        -- Handle entering the room based on type
+                        if (targetRoom.type == "combat" or targetRoom.type == "boss" or targetRoom.type == "elite") and not targetRoom.isCleared then
+                            self:enterCombat(targetRoom)
+                        else
+                            print("Entered room type: " .. targetRoom.type)
+                             if targetRoom.type ~= "combat" and targetRoom.type ~= "boss" and targetRoom.type ~= "elite" then
+                                 targetRoom.isCleared = true -- Mark non-combat as cleared
+                             end
+                        end
+                    end
                 end
+                self.lastClickTime = currentTime
+                self.lastClickedNodeId = clickedNodeId
 
-                -- Show notification
-                self.hud:showNotification("Used " .. selectedAbility.name, 1.5)
-                return
-
+            else
+                print("Clicked node " .. clickedNodeId .. " is not connected to current node " .. self.currentNodeId)
+                self.selectedNodeId = nil -- Deselect if not connected
             end
-        end
-    end
-    
-    -- Left click
-    if button == 1 then
-        -- Check if there's a unit at the clicked position
-        local entity = grid:getEntityAt(gridX, gridY)
-        
-        if entity and entity.faction == "player" then
-            -- Select player unit
-            self:selectUnit(entity)
-        elseif selectedUnit then
-            -- Check if it's a valid move position
-            local isValidMove = false
-            for _, move in ipairs(validMoves) do
-                if move.x == gridX and move.y == gridY then
-                    isValidMove = true
-                    break
-                end
-            end
-            
-            if isValidMove then
-                -- Move to empty tile
-                self:moveSelectedUnit(gridX, gridY)
-            elseif entity and entity.faction == "enemy" then
-                -- Attack enemy unit if in range
-                if self:canAttack(selectedUnit, entity) then
-                    self:attackUnit(selectedUnit, entity)
-                end
-            end
-        end
-    end
-    
-    -- Right click
-    if button == 2 then
-        -- Deselect ability if one is selected
-        if self.hud and self.hud.abilityPanel:getSelectedAbility() then
-            -- Reset ability selection
-            self.hud.abilityPanel.selectedSlot = nil
-            return
-        end
-
-        -- Deselect unit
-        selectedUnit = nil
-        validMoves = {}
-
-        -- Update HUD to clear selected unit
-        if self.hud then
-            self.hud:setSelectedUnit(nil)
-        end
-    end
-end
-
--- Handle resize event
-function Game:resize(w, h)
-    -- Update HUD element positions
-    if self.hud then
-        self.hud:resize(w, h)
-    end
-end
-
-function Game:debugAbilities()
-    print("\n=== DEBUGGING ABILITIES ===")
-    
-    -- Check if special abilities system is initialized
-    if not specialAbilitiesSystem then
-        print("ERROR: specialAbilitiesSystem not initialized")
-        return
-    end
-    
-    -- List all available abilities
-    print("\nAvailable abilities in specialAbilitiesSystem:")
-    local count = 0
-    for id, ability in pairs(specialAbilitiesSystem.abilities) do
-        count = count + 1
-        print(count .. ". " .. id .. " -> " .. (ability.name or "NO NAME"))
-    end
-    
-    -- Check player units' abilities
-    print("\nPlayer Units' Abilities:")
-    for i, unit in ipairs(playerUnits) do
-        print("Unit " .. i .. " (" .. unit.unitType .. "):")
-        
-        if not unit.abilities or #unit.abilities == 0 then
-            print("  - No abilities")
         else
-            for j, abilityId in ipairs(unit.abilities) do
-                local ability = specialAbilitiesSystem:getAbility(abilityId)
-                if ability then
-                    print("  " .. j .. ". " .. abilityId .. " -> " .. ability.name)
-                    print("     Cooldown: " .. unit:getAbilityCooldown(abilityId) .. "/" .. (ability.cooldown or 0))
-                    print("     Can use: " .. tostring(unit:canUseAbility(abilityId)))
-                else
-                    print("  " .. j .. ". " .. abilityId .. " -> NOT FOUND IN SYSTEM")
-                end
-            end
+            self.selectedNodeId = nil -- Clicked empty space
         end
     end
-    
-    -- Check UI connections
-    print("\nUI Connections:")
-    print("HUD exists: " .. tostring(self.hud ~= nil))
-    if self.hud then
-        print("HUD has ability panel: " .. tostring(self.hud.abilityPanel ~= nil))
-        if self.hud.abilityPanel then
-            print("Ability panel game reference: " .. tostring(self.hud.abilityPanel.game ~= nil))
-            if self.hud.abilityPanel.game then
-                print("Game has specialAbilitiesSystem: " .. tostring(self.hud.abilityPanel.game.specialAbilitiesSystem ~= nil))
-            end
-        end
-    end
-    
-    print("=== END DEBUGGING ===\n")
 end
+
+function Game:mousemoved(x, y, dx, dy)
+    -- Update hovered node
+    self.hoveredNodeId = self:getNodeAtScreenPos(x, y)
+end
+
+-- Helper to get node ID at screen position
+function Game:getNodeAtScreenPos(screenX, screenY)
+    local floor = self.dungeon and self.dungeon.floors[self.currentFloorIndex]
+    if not floor then return nil end
+
+    -- Need to account for camera offset/scale if map is pannable/zoomable
+    -- For now, assume fixed map position as drawn in drawDungeonMap
+    local minX, maxX, minY, maxY = 1000, -1000, 1000, -1000
+    for _, room in ipairs(floor.rooms) do
+        if room.mapPosition then
+            minX = math.min(minX, room.mapPosition.x)
+            maxX = math.max(maxX, room.mapPosition.x)
+            minY = math.min(minY, room.mapPosition.y)
+            maxY = math.max(maxY, room.mapPosition.y)
+        end
+    end
+     local mapWidth = maxX - minX + MAP_NODE_SIZE
+     local mapHeight = maxY - minY + MAP_NODE_SIZE
+     local mapOffsetX = (love.graphics.getWidth() - mapWidth) / 2 - minX
+     local mapOffsetY = (love.graphics.getHeight() - mapHeight) / 2 - minY
+
+    for _, room in ipairs(floor.rooms) do
+        if room.mapPosition then
+            local nodeX = mapOffsetX + room.mapPosition.x
+            local nodeY = mapOffsetY + room.mapPosition.y
+            if screenX >= nodeX and screenX <= nodeX + MAP_NODE_SIZE and
+               screenY >= nodeY and screenY <= nodeY + MAP_NODE_SIZE then
+                return room.id
+            end
+        end
+    end
+    return nil
+end
+
+
+-- Function to initiate combat
+function Game:enterCombat(room)
+    print("Entering combat in room: " .. room.id)
+    self.lastCombatNodeId = room.id -- Remember which node triggered combat
+
+    -- 1. Prepare Player Data: Create deep copies or pass references carefully.
+    --    For simplicity, let's pass references, assuming combat state won't
+    --    permanently alter units beyond health/status unless intended.
+    local playerCombatParty = {}
+    for _, unit in ipairs(self.playerParty) do
+        -- TODO: Consider cloning if combat should not affect the main party state directly
+        -- until after combat resolution. For now, pass reference.
+        table.insert(playerCombatParty, unit)
+    end
+
+    -- 2. Prepare Enemy Data: Get the formation data from the room.
+    local enemyFormationData = room.enemyFormation
+    if not enemyFormationData then
+        print("WARNING: Combat room " .. room.id .. " has no enemy formation data!")
+        -- Decide how to handle this: maybe generate a default formation?
+        -- For now, we'll proceed but combat state needs to handle nil formation.
+    end
+
+    -- 3. Prepare Grid Data: Pass dimensions or layout info.
+    --    Combat state will create its own Grid instance.
+    local gridLayoutData = room.gridData -- Contains width, height, maybe tile info
+
+    -- 4. Get Combat State Reference
+    local CombatState = require("src.states.combat") -- Ensure it's loaded
+
+    -- 5. Switch State
+    gamestate.switch(CombatState, self.game, playerCombatParty, enemyFormationData, gridLayoutData, self)
+end
+
 
 return Game

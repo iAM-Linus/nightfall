@@ -65,12 +65,40 @@ function InputHandler:update(dt)
     self.mouse.x = mx
     self.mouse.y = my
     
-    -- Clear one-frame states
+    -- *** ADD LOG before clearing ***
+    local pressedKeys = {}
+    for k, v in pairs(self.keysPressed) do if v then table.insert(pressedKeys, k) end end
+    if #pressedKeys > 0 then print("[InputHandler] Clearing keysPressed:", table.concat(pressedKeys, ", ")) end
+    local pressedBtns = {}
+    for k, v in pairs(self.mouse.buttonsPressed) do if v then table.insert(pressedBtns, k) end end
+    if #pressedBtns > 0 then print("[InputHandler] Clearing buttonsPressed:", table.concat(pressedBtns, ", ")) end
+    -- *** END LOG ***
+
+    -- *** REMOVE CLEARING LOGIC FROM HERE ***
+    -- self.keysPressed = {}
+    -- self.keysReleased = {}
+    -- self.mouse.buttonsPressed = {}
+    -- self.mouse.buttonsReleased = {}
+    -- self.touchesPressed = {}
+    -- self.touchesReleased = {}
+end
+
+-- *** ADD: New method to clear pressed states ***
+function InputHandler:clearPressedState()
+    -- Optional: Log when clearing
+    -- local pressedKeys = {}
+    -- for k, v in pairs(self.keysPressed) do if v then table.insert(pressedKeys, k) end end
+    -- if #pressedKeys > 0 then print("[InputHandler] Clearing keysPressed:", table.concat(pressedKeys, ", ")) end
+    -- local pressedBtns = {}
+    -- for k, v in pairs(self.mouse.buttonsPressed) do if v then table.insert(pressedBtns, k) end end
+    -- if #pressedBtns > 0 then print("[InputHandler] Clearing buttonsPressed:", table.concat(pressedBtns, ", ")) end
+
     self.keysPressed = {}
-    self.keysReleased = {}
     self.mouse.buttonsPressed = {}
-    self.mouse.buttonsReleased = {}
     self.touchesPressed = {}
+    -- Keep released flags for one frame? Or clear them too? Let's clear them for simplicity.
+    self.keysReleased = {}
+    self.mouse.buttonsReleased = {}
     self.touchesReleased = {}
 end
 
@@ -190,33 +218,39 @@ end
 
 -- Key pressed callback
 function InputHandler:keypressed(key, scancode, isrepeat)
+    print("[InputHandler] keypressed:", key) -- *** ADD LOG ***
     self.keys[key] = true
     self.keysPressed[key] = true
-    
+    print("  -> keysPressed["..key.."] set to", self.keysPressed[key]) -- *** ADD LOG ***
+
     self:triggerCallbacks("keypressed", key, scancode, isrepeat)
 end
 
 -- Key released callback
 function InputHandler:keyreleased(key, scancode)
+    -- print("[InputHandler] keyreleased:", key) -- Optional log
     self.keys[key] = false
     self.keysReleased[key] = true
-    
+
     self:triggerCallbacks("keyreleased", key, scancode)
 end
 
 -- Mouse pressed callback
 function InputHandler:mousepressed(x, y, button, istouch, presses)
+    print("[InputHandler] mousepressed:", button, "at", x, y) -- *** ADD LOG ***
     self.mouse.buttons[button] = true
     self.mouse.buttonsPressed[button] = true
-    
+    print("  -> buttonsPressed["..button.."] set to", self.mouse.buttonsPressed[button]) -- *** ADD LOG ***
+
     self:triggerCallbacks("mousepressed", x, y, button, istouch, presses)
 end
 
 -- Mouse released callback
 function InputHandler:mousereleased(x, y, button, istouch, presses)
+    -- print("[InputHandler] mousereleased:", button, "at", x, y) -- Optional log
     self.mouse.buttons[button] = false
     self.mouse.buttonsReleased[button] = true
-    
+
     self:triggerCallbacks("mousereleased", x, y, button, istouch, presses)
 end
 

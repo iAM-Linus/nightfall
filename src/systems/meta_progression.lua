@@ -827,7 +827,8 @@ end
 
 -- Load progress from file
 function MetaProgression:loadProgress()
-    if not love.filesystem.exists("meta_progress.save") then
+    if not love.filesystem.getInfo("meta_progress.save") then
+        -- If getInfo returns nil, the file doesn't exist or isn't accessible
         return false, "No save file found"
     end
     

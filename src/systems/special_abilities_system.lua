@@ -12,81 +12,208 @@ function SpecialAbilitiesSystem:initialize(game)
     -- Special ability definitions
     self.abilities = {
         -- KNIGHT ABILITIES
-        
-        -- Knight's Charge: Dash to a location and damage enemies in path
+    
         knights_charge = {
             id = "knights_charge",
             name = "Knight's Charge",
             description = "Dash to a location and damage enemies in path",
-            icon = nil, -- Would be an image in a full implementation
+            icon = nil,
             energyCost = 4,
             actionPointCost = 1,
             cooldown = 3,
             targetType = "position",
-            range = 4,
+            attackRange = 4,
             unitType = "knight",
-            onUse = function(caster, target, x, y, grid)
+            onUse = function(caster, target, x, y, grid) -- target might be nil or the entity at x,y
+                local ability = self.abilities.knights_charge
                 -- Check if target position is valid
                 if not x or not y or not grid:isInBounds(x, y) then
+                    print("Knight's Charge: Target position out of bounds.")
                     return false
                 end
-                
-                -- Check if position is reachable
+    
+                -- Check if position is within attackRange (Manhattan distance)
+                print("Caster.x: " .. caster.x .. ", Caster.y: " .. caster.y)
+                print("x: " .. x .. ", y: " .. y)
+                print("knights_charge.attackRange: " .. ability.attackRange)
                 local distance = math.abs(caster.x - x) + math.abs(caster.y - y)
-                if distance > 4 then
+                print(distance)
+                if distance == 0 then
+                     print("Knight's Charge: Cannot charge to current position.")
+                     return false
+                end
+                if distance > ability.attackRange then
+                    print("Knight's Charge: Target position out of attackRange.")
                     return false
                 end
-                
-                -- Create a simple line path instead of using getLinePath
+    
+                -- Check if final position is blocked (optional, depends on if charge can end on occupied tile)
+                -- local endEntity = grid:getEntityAt(x, y)
+                -- if endEntity and endEntity ~= caster then
+                --     print("Knight's Charge: Target position is occupied.")
+                --     return false -- Or handle differently if charge can end on enemy/ally
+                -- end
+    
+                -- Create a simple line path (consider using a more robust line algorithm like Bresenham if needed)
                 local path = {}
-                local dx = x - caster.x
-                local dy = y - caster.y
-                
-                -- Create normalized direction
-                if dx ~= 0 then dx = dx / math.abs(dx) end
-                if dy ~= 0 then dy = dy / math.abs(dy) end
-                
-                -- Create path points
                 local currentX, currentY = caster.x, caster.y
-                while currentX ~= x or currentY ~= y do
-                    currentX = currentX + dx
-                    currentY = currentY + dy
-                    table.insert(path, {x = currentX, y = currentY})
-                    
-                    -- Safety to prevent infinite loops
-                    if #path > 20 then break end
+                local targetX, targetY = x, y
+    
+                -- Simplified path generation (assumes direct line, may need refinement for obstacles/turns)
+                while currentX ~= targetX or currentY ~= targetY do
+                     local stepX, stepY = 0, 0
+                     if targetX > currentX then stepX = 1 elseif targetX < currentX then stepX = -1 end
+                     if targetY > currentY then stepY = 1 elseif targetY < currentY then stepY = -1 end
+    
+                     -- Move diagonally first if needed, then straight
+                     if stepX ~= 0 and stepY ~= 0 then
+                        -- Check diagonal step
+                        if not grid:getEntityAt(currentX + stepX, currentY + stepY) then
+                             currentX = currentX + stepX
+                             currentY = currentY + stepY
+                        -- Check horizontal step as alternative
+                        elseif not grid:getEntityAt(currentX + stepX, currentY) then
+                             currentX = currentX + stepX
+                        -- Check vertical step as alternative
+                        elseif not grid:getEntityAt(currentX, currentY + stepY) then
+                             currentY = currentY + stepY
+                        else -- Blocked
+                             print("Knight's Charge: Path blocked at", currentX + stepX, currentY + stepY)
+                             -- Decide: Stop short, fail, or find alternative path? Let's fail for simplicity.
+                             -- Note: A* pathfinding would be better here.
+                             -- We will actually just calculate damage along the ideal path and then try to move.
+                             -- Recalculating path generation for damage dealing part.
+                             path = {} -- Reset path
+                             local dx = targetX - caster.x
+                             local dy = targetY - caster.y
+                             local steps = math.max(math.abs(dx), math.abs(dy))
+                             if steps == 0 then break end -- Should not happen due to distance check
+                             for i = 1, steps do
+                                 local pathX = math.floor(caster.x + dx * i / steps + 0.5) -- Bresenham-like approx
+                                 local pathY = math.floor(caster.y + dy * i / steps + 0.5)
+                                 -- Avoid adding duplicates if path is short/slow
+                                 if #path == 0 or path[#path].x ~= pathX or path[#path].y ~= pathY then
+                                     table.insert(path, {x = pathX, y = pathY})
+                                 end
+                             end
+                             break -- Exit the path generation loop used for movement check
+                        end
+                     elseif stepX ~= 0 then -- Horizontal only
+                         currentX = currentX + stepX
+                     elseif stepY ~= 0 then -- Vertical only
+                         currentY = currentY + stepY
+                     end
+    
+                     -- Add the *intermediate* position to the path for damage check
+                     if currentX ~= targetX or currentY ~= targetY then
+                         -- Check if path segment is valid (not blocked by terrain/impassable)
+                         -- For simplicity, assume no impassable terrain here, only units block movement attempt later
+                         table.insert(path, {x = currentX, y = currentY})
+                     end
+    
+                     -- Safety break
+                     if #path > (caster.stats.attackRange * 2) then -- Heuristic limit
+                         print("Knight's Charge: Path generation exceeded limit.")
+                         return false
+                     end
                 end
-                
-                -- Get hit units
+                 -- Ensure final target position is in the path if it wasn't added
+                if #path == 0 or path[#path].x ~= targetX or path[#path].y ~= targetY then
+                     table.insert(path, {x = targetX, y = targetY})
+                end
+    
+    
+                -- Get hit units along the calculated path (excluding start, including end tile occupant if any)
                 local hitUnits = {}
-                for _, pos in ipairs(path) do
+                local finalPositionBlockedByEnemy = false
+                for i, pos in ipairs(path) do
                     local entity = grid:getEntityAt(pos.x, pos.y)
                     if entity and entity ~= caster and entity.faction ~= caster.faction then
                         table.insert(hitUnits, entity)
+                        if i == #path then -- Check if the final destination is blocked by an enemy
+                            finalPositionBlockedByEnemy = true
+                        end
+                    elseif entity and entity ~= caster and entity.faction == caster.faction then
+                        -- If path is blocked by an ally, cannot charge through/to there
+                        print("Knight's Charge: Path blocked by ally at", pos.x, pos.y)
+                        return false
+                    elseif entity == caster then
+                        -- Skip caster's starting position if it somehow gets included
+                        goto continue_path_check
                     end
+                    ::continue_path_check::
                 end
-                
-                -- Move user to target position
-                grid:removeEntity(caster)
-                caster.x = x
-                caster.y = y
-                grid:placeEntity(caster, x, y)
-                
-                -- Deal damage to hit units
-                for _, hitUnit in ipairs(hitUnits) do
-                    local damage = math.ceil(caster.stats.attack * 0.8)
-                    hitUnit.stats.health = math.max(0, hitUnit.stats.health - damage)
-                    print(hitUnit.unitType .. " took " .. damage .. " damage from Knight's Charge")
+    
+                -- Check if the final tile is empty *now* (important for moveTo)
+                local finalTileEntity = grid:getEntityAt(x, y)
+                if finalTileEntity and finalTileEntity ~= caster then
+                     print("Knight's Charge: Final position", x, y, "is occupied by", finalTileEntity.unitType)
+                     -- Potentially allow charging *to* an enemy tile but not *through* it? Design decision needed.
+                     -- For now, require the final tile to be empty for the move.
+                     -- Damage will still apply to units hit along the path.
+                     -- If the intent is to stop *before* the occupied tile, adjust 'x' and 'y' here.
+                     -- Let's assume the charge *must* end on an empty tile.
+                     if finalPositionBlockedByEnemy or grid:getEntityAt(x,y) then
+                         print("Knight's Charge: Cannot complete move to occupied tile.")
+                         -- We can still deal damage to units hit *before* the final tile, then fail the move part.
+                         -- Deal damage first, then check move success.
+                     end
                 end
-                
-                -- Visual feedback
-                print(caster.unitType:upper() .. " used Knight's Charge!")
-                
-                return true
+    
+    
+                -- Deal damage to hit units (even if move fails later)
+                local damageDealt = false
+                if self.game and self.game.combatSystem then
+                    for _, hitUnit in ipairs(hitUnits) do
+                        -- Check if unit is still valid (might have been killed by another effect)
+                        if hitUnit and hitUnit.stats and hitUnit.stats.health > 0 then
+                            local damage = math.ceil(caster.stats.attack * 0.8)
+                            self.game.combatSystem:applyDirectDamage(hitUnit, damage, {
+                                source = "ability",
+                                ability = self.id,
+                                caster = caster,
+                                isCritical = false,
+                                isMiss = false
+                            })
+                            print(hitUnit.unitType .. " took " .. damage .. " damage from Knight's Charge")
+                            damageDealt = true
+                        end
+                    end
+                else
+                    print("WARNING: CombatSystem not found, cannot apply Knight's Charge damage.")
+                    -- Fallback to direct health reduction if needed, but less ideal
+                    -- for _, hitUnit in ipairs(hitUnits) do
+                    --     if hitUnit and hitUnit.stats and hitUnit.stats.health > 0 then
+                    --         local damage = math.ceil(caster.stats.attack * 0.8)
+                    --         hitUnit.stats.health = math.max(0, hitUnit.stats.health - damage)
+                    --         print(hitUnit.unitType .. " took " .. damage .. " damage from Knight's Charge (direct)")
+                    --         damageDealt = true
+                    --     end
+                    -- end
+                end
+    
+                 -- Check again if the final tile is empty before moving
+                if grid:getEntityAt(x, y) then
+                    print(caster.unitType:upper() .. " used Knight's Charge (Damage only, move blocked)!")
+                    return damageDealt -- Return true if damage was dealt, even if move failed
+                end
+    
+                -- Move caster to target position using moveTo
+                local moveSuccess = caster:moveTo(x, y)
+    
+                if moveSuccess then
+                    -- Visual feedback / Log
+                    print(caster.unitType:upper() .. " used Knight's Charge!")
+                    return true -- Ability use was successful
+                else
+                    -- moveTo failed
+                    print(caster.unitType:upper() .. " failed to complete Knight's Charge move (moveTo returned false).")
+                     -- Return true if damage was dealt before move failed, otherwise false
+                    return damageDealt
+                end
             end
         },
-        
-        -- Feint: Reduce damage taken and counter next attack
+    
         feint = {
             id = "feint",
             name = "Feint",
@@ -96,31 +223,27 @@ function SpecialAbilitiesSystem:initialize(game)
             actionPointCost = 1,
             cooldown = 2,
             targetType = "self",
-            range = 0,
+            attackRange = 0,
             unitType = "knight",
-            onUse = function(user, target, x, y)
-                -- Apply counter status
-                if self.game.statusEffectsSystem then
-                    -- Apply shielded effect
-                    self.game.statusEffectsSystem:applyEffect(user, "shielded", user)
-                    
-                    -- Apply custom counter effect
-                    user.counterNextAttack = true
-                    
-                    -- Set up counter removal after turn
-                    timer.after(1, function()
-                        user.counterNextAttack = false
-                    end)
+            onUse = function(caster, target, x, y, grid) -- target will be caster
+                if self.game and self.game.statusEffectsSystem then
+                    -- Apply shielded effect (assuming it reduces damage taken)
+                    -- Duration might be 1 turn or until next attack, handled by effect definition
+                    self.game.statusEffectsSystem:applyEffect(caster, "shielded", caster)
+    
+                    -- Apply counter effect (assuming it triggers on next attack received)
+                    -- Duration might be 1 turn or until triggered, handled by effect definition
+                    self.game.statusEffectsSystem:applyEffect(caster, "counter_stance", caster)
+    
+                    print(caster.unitType:upper() .. " used Feint!")
+                    return true
+                else
+                    print("WARNING: StatusEffectsSystem not found, cannot apply Feint effects.")
+                    return false
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Feint!")
-                
-                return true
             end
         },
-        
-        -- Flanking Maneuver: Move to opposite side of target and attack with bonus damage
+    
         flanking_maneuver = {
             id = "flanking_maneuver",
             name = "Flanking Maneuver",
@@ -130,60 +253,79 @@ function SpecialAbilitiesSystem:initialize(game)
             actionPointCost = 1,
             cooldown = 3,
             targetType = "enemy",
-            range = 3,
+            attackRange = 3, -- Range to initiate the maneuver from
             unitType = "knight",
-            onUse = function(user, target, x, y)
-                if not target or target.faction == user.faction then
+            onUse = function(caster, target, x, y, grid) -- x,y here are target's coords
+                if not target or target.faction == caster.faction or not target.stats then
+                     print("Flanking Maneuver: Invalid target.")
                     return false
                 end
-                
-                -- Calculate opposite position
-                local dx = target.x - user.x
-                local dy = target.y - user.y
+    
+                -- Check attackRange to target
+                local distance = math.abs(caster.x - target.x) + math.abs(caster.y - target.y)
+                if distance > self.attackRange then
+                     print("Flanking Maneuver: Target out of attackRange.")
+                    return false
+                end
+    
+                -- Calculate opposite position relative to the target
+                -- Simple reflection: T = target, C = caster, O = opposite
+                -- O.x = T.x + (T.x - C.x) = 2*T.x - C.x
+                -- O.y = T.y + (T.y - C.y) = 2*T.y - C.y
+                -- More robust: Find vector C->T, move T by that vector again.
+                local dx = target.x - caster.x
+                local dy = target.y - caster.y
                 local oppositeX = target.x + dx
                 local oppositeY = target.y + dy
-                
-                -- Check if opposite position is valid
-                if not user.grid:isInBounds(oppositeX, oppositeY) then
+    
+                -- Check if opposite position is valid and in bounds
+                if not grid:isInBounds(oppositeX, oppositeY) then
+                     print("Flanking Maneuver: Opposite position out of bounds.")
                     return false
                 end
-                
+    
                 -- Check if opposite position is empty
-                if user.grid:getEntityAt(oppositeX, oppositeY) then
+                local entityAtOpposite = grid:getEntityAt(oppositeX, oppositeY)
+                if entityAtOpposite and entityAtOpposite ~= caster then -- Allow moving if it's somehow the caster's current spot
+                     print("Flanking Maneuver: Opposite position is occupied.")
                     return false
                 end
-                
-                -- Move user to opposite position
-                user.grid:removeEntity(user.x, user.y)
-                user.x = oppositeX
-                user.y = oppositeY
-                user.grid:placeEntity(user, oppositeX, oppositeY)
-                
-                -- Attack target with bonus damage
-                local damage = math.ceil(user.stats.attack * 1.5)
-                
-                if self.game.combatSystem then
-                    self.game.combatSystem:applyDirectDamage(target, damage, {
-                        source = "ability",
-                        ability = "flanking_maneuver",
-                        user = user,
-                        isCritical = true,
-                        isMiss = false
-                    })
+    
+                -- Move caster to opposite position using moveTo
+                local moveSuccess = caster:moveTo(oppositeX, oppositeY)
+    
+                if moveSuccess then
+                    -- Attack target with bonus damage *after* successful move
+                    local damage = math.ceil(caster.stats.attack * 1.5)
+    
+                    if self.game and self.game.combatSystem then
+                        self.game.combatSystem:applyDirectDamage(target, damage, {
+                            source = "ability",
+                            ability = self.id,
+                            caster = caster,
+                            isCritical = true, -- Flanking could be considered a critical/bonus hit
+                            isMiss = false
+                        })
+                         print(caster.unitType:upper() .. " used Flanking Maneuver on " .. target.unitType .. "!")
+                         return true -- Ability use was successful
+                    else
+                        print("WARNING: CombatSystem not found, cannot apply Flanking Maneuver damage.")
+                        -- Fallback direct damage (less ideal)
+                        -- target.stats.health = math.max(0, target.stats.health - damage)
+                        -- print(caster.unitType:upper() .. " used Flanking Maneuver on " .. target.unitType .. "! (Direct Damage)")
+                        -- return true -- Still counts as success if move worked but damage system missing
+                        return false -- Or decide failure if core part (damage) is missing
+                    end
                 else
-                    target:takeDamage(damage, user)
+                    -- moveTo failed
+                    print(caster.unitType:upper() .. " failed Flanking Maneuver (moveTo returned false).")
+                    return false -- Ability use failed
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Flanking Maneuver!")
-                
-                return true
             end
         },
-        
+    
         -- ROOK ABILITIES
-        
-        -- Fortify: Increase defense and become immovable
+    
         fortify = {
             id = "fortify",
             name = "Fortify",
@@ -193,40 +335,26 @@ function SpecialAbilitiesSystem:initialize(game)
             actionPointCost = 1,
             cooldown = 2,
             targetType = "self",
-            range = 0,
+            attackRange = 0,
             unitType = "rook",
-            onUse = function(user, target, x, y)
-                -- Store original defense
-                user.originalDefense = user.stats.defense
-                
-                -- Increase defense
-                user.stats.defense = user.stats.defense * 2
-                
-                -- Apply immovable status
-                user.isImmovable = true
-                
-                -- Set up effect removal after 2 turns
-                timer.after(2, function()
-                    -- Restore original defense
-                    if user.originalDefense then
-                        user.stats.defense = user.originalDefense
-                        user.originalDefense = nil
-                    end
-                    
-                    -- Remove immovable status
-                    user.isImmovable = false
-                    
-                    print(user.unitType:upper() .. " is no longer fortified")
-                end)
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Fortify!")
-                
-                return true
+            onUse = function(caster, target, x, y, grid) -- target is caster
+                if self.game and self.game.statusEffectsSystem then
+                    -- Apply fortified effect (increases defense, duration handled by effect)
+                    -- Duration might be 2 turns, handled by effect definition
+                    self.game.statusEffectsSystem:applyEffect(caster, "fortified", caster) -- Assumes "fortified" handles defense boost
+    
+                    -- Apply immovable effect (prevents forced movement, duration handled by effect)
+                     self.game.statusEffectsSystem:applyEffect(caster, "immovable", caster) -- Assumes "immovable" status exists
+    
+                    print(caster.unitType:upper() .. " used Fortify!")
+                    return true
+                else
+                    print("WARNING: StatusEffectsSystem not found, cannot apply Fortify effects.")
+                    return false
+                end
             end
         },
-        
-        -- Shockwave: Damage and push back all adjacent enemies
+    
         shockwave = {
             id = "shockwave",
             name = "Shockwave",
@@ -236,113 +364,173 @@ function SpecialAbilitiesSystem:initialize(game)
             actionPointCost = 1,
             cooldown = 3,
             targetType = "self",
-            range = 0,
+            attackRange = 0, -- AoE originates from self
             unitType = "rook",
-            onUse = function(user, target, x, y)
-                -- Get all adjacent enemies
-                local adjacentPositions = {
-                    {x = user.x - 1, y = user.y},
-                    {x = user.x + 1, y = user.y},
-                    {x = user.x, y = user.y - 1},
-                    {x = user.x, y = user.y + 1}
+            onUse = function(caster, target, x, y, grid) -- target is caster
+                local adjacentOffsets = {
+                    {dx = -1, dy = 0}, {dx = 1, dy = 0}, {dx = 0, dy = -1}, {dx = 0, dy = 1},
+                    {dx = -1, dy = -1}, {dx = 1, dy = -1}, {dx = -1, dy = 1}, {dx = 1, dy = 1} -- Include diagonals? Original only had cardinal. Let's stick to cardinal.
                 }
-                
-                local hitUnits = {}
-                
-                for _, pos in ipairs(adjacentPositions) do
-                    local entity = user.grid:getEntityAt(pos.x, pos.y)
-                    if entity and entity.faction ~= user.faction then
-                        table.insert(hitUnits, {
-                            unit = entity,
-                            dx = pos.x - user.x,
-                            dy = pos.y - user.y
-                        })
+                 adjacentOffsets = { {dx = -1, dy = 0}, {dx = 1, dy = 0}, {dx = 0, dy = -1}, {dx = 0, dy = 1} }
+    
+                local affectedUnits = {}
+    
+                for _, offset in ipairs(adjacentOffsets) do
+                    local checkX = caster.x + offset.dx
+                    local checkY = caster.y + offset.dy
+                    if grid:isInBounds(checkX, checkY) then
+                        local entity = grid:getEntityAt(checkX, checkY)
+                        -- Target enemies only
+                        if entity and entity.faction ~= caster.faction and entity.stats then
+                            table.insert(affectedUnits, {
+                                unit = entity,
+                                pushDx = offset.dx, -- Push direction is away from caster
+                                pushDy = offset.dy
+                            })
+                        end
                     end
                 end
-                
-                -- Deal damage and push back
-                for _, hit in ipairs(hitUnits) do
+    
+                if #affectedUnits == 0 then
+                    print(caster.unitType:upper() .. " used Shockwave, but no enemies were adjacent.")
+                    return true -- Ability used, just had no targets
+                end
+    
+                local actionSuccess = false
+                -- Deal damage and attempt pushback
+                for _, hit in ipairs(affectedUnits) do
                     local hitUnit = hit.unit
-                    local pushX = hitUnit.x + hit.dx
-                    local pushY = hitUnit.y + hit.dy
-                    
-                    -- Deal damage
-                    local damage = math.ceil(user.stats.attack * 0.7)
-                    
-                    if self.game.combatSystem then
+                    local pushToX = hitUnit.x + hit.pushDx
+                    local pushToY = hitUnit.y + hit.pushDy
+    
+                     -- Check if unit is still valid (might have been killed by another effect or previous iteration)
+                    if not hitUnit or not hitUnit.stats or hitUnit.stats.health <= 0 then
+                        goto continue_shockwave_loop
+                    end
+    
+                    -- 1. Deal damage
+                    local damage = math.ceil(caster.stats.attack * 0.7)
+                    if self.game and self.game.combatSystem then
                         self.game.combatSystem:applyDirectDamage(hitUnit, damage, {
                             source = "ability",
-                            ability = "shockwave",
-                            user = user,
+                            ability = self.id,
+                            caster = caster,
                             isCritical = false,
                             isMiss = false
                         })
+                        print(hitUnit.unitType .. " took " .. damage .. " damage from Shockwave.")
+                        actionSuccess = true -- Mark success if at least damage happens
                     else
-                        hitUnit:takeDamage(damage, user)
+                        print("WARNING: CombatSystem not found, cannot apply Shockwave damage to " .. hitUnit.unitType)
+                        -- Fallback direct damage
+                        -- hitUnit.stats.health = math.max(0, hitUnit.stats.health - damage)
+                        -- print(hitUnit.unitType .. " took " .. damage .. " damage from Shockwave (Direct).")
+                        -- actionSuccess = true
                     end
-                    
-                    -- Push back if possible
-                    if user.grid:isInBounds(pushX, pushY) and not user.grid:getEntityAt(pushX, pushY) then
-                        user.grid:removeEntity(hitUnit.x, hitUnit.y)
-                        hitUnit.x = pushX
-                        hitUnit.y = pushY
-                        user.grid:placeEntity(hitUnit, pushX, pushY)
+    
+                     -- Check again if unit survived damage before pushing
+                     if not hitUnit or not hitUnit.stats or hitUnit.stats.health <= 0 then
+                        goto continue_shockwave_loop
                     end
+    
+                    -- 2. Attempt Pushback
+                    -- Check if the push target position is valid, in bounds, and empty
+                    if grid:isInBounds(pushToX, pushToY) and not grid:getEntityAt(pushToX, pushToY) then
+                        -- Check if the unit is immovable
+                        local isImmovable = false
+                        if self.game and self.game.statusEffectsSystem then
+                             isImmovable = self.game.statusEffectsSystem:hasEffect(hitUnit, "immovable")
+                        else
+                             -- Check fallback flag if status system not present (less ideal)
+                             isImmovable = hitUnit.isImmovable
+                        end
+    
+                        if not isImmovable then
+                            -- Ideally, use a push function: hitUnit:bePushedTo(pushToX, pushToY, caster)
+                            -- Or a system call: self.game.movementSystem:pushUnit(hitUnit, pushToX, pushToY)
+                            -- Lacking those, use direct grid manipulation (less safe, no animation hook):
+                            print("Pushing " .. hitUnit.unitType .. " from (" .. hitUnit.x .. "," .. hitUnit.y .. ") to (" .. pushToX .. "," .. pushToY .. ")")
+                            grid:removeEntity(hitUnit) -- Remove from old position
+                            hitUnit.x = pushToX       -- Update unit's internal position
+                            hitUnit.y = pushToY
+                            grid:placeEntity(hitUnit, pushToX, pushToY) -- Place in new position
+                            actionSuccess = true -- Mark success if push happens
+                            -- Trigger any "onMoved" events if applicable
+                        else
+                            print(hitUnit.unitType .. " resisted pushback (immovable).")
+                        end
+                    else
+                        print("Cannot push " .. hitUnit.unitType .. ": target square (" .. pushToX .. "," .. pushToY .. ") is invalid, out of bounds, or occupied.")
+                    end
+                    ::continue_shockwave_loop::
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Shockwave!")
-                
-                return true
+    
+                if actionSuccess then
+                    print(caster.unitType:upper() .. " used Shockwave!")
+                end
+    
+                return actionSuccess -- Return true if any damage or push occurred
             end
         },
-        
-        -- Stone Skin: Become immune to status effects
+    
         stone_skin = {
             id = "stone_skin",
             name = "Stone Skin",
-            description = "Become immune to status effects",
+            description = "Become immune to status effects and clear negative ones",
             icon = nil,
             energyCost = 4,
             actionPointCost = 1,
             cooldown = 4,
             targetType = "self",
-            range = 0,
+            attackRange = 0,
             unitType = "rook",
-            onUse = function(user, target, x, y)
-                -- Apply status effect immunity
-                user.immuneToStatusEffects = true
-                
-                -- Clear existing negative status effects
-                if user.statusEffects then
-                    local i = 1
-                    while i <= #user.statusEffects do
-                        local effect = user.statusEffects[i]
-                        if effect.name == "Burning" or effect.name == "Stunned" or 
-                           effect.name == "Weakened" or effect.name == "Slowed" then
-                            table.remove(user.statusEffects, i)
-                        else
-                            i = i + 1
-                        end
-                    end
+            onUse = function(caster, target, x, y, grid) -- target is caster
+                if self.game and self.game.statusEffectsSystem then
+                     -- Apply status immunity effect (duration handled by effect)
+                     -- Duration might be 3 turns, handled by effect definition
+                    self.game.statusEffectsSystem:applyEffect(caster, "status_immune", caster) -- Assumes "status_immune" status exists
+    
+                     -- Clear existing negative status effects (this logic might belong *inside* the applyEffect for "status_immune")
+                     -- Assuming the status system provides a way to clear effects by type or tag
+                     local negativeEffectTypes = {"debuff", "dot", "control"} -- Example categories
+                     self.game.statusEffectsSystem:clearEffectsByType(caster, negativeEffectTypes)
+                     -- Or if clearing specific known effects:
+                     -- self.game.statusEffectsSystem:removeEffectByName(caster, "Burning")
+                     -- self.game.statusEffectsSystem:removeEffectByName(caster, "Stunned")
+                     -- self.game.statusEffectsSystem:removeEffectByName(caster, "Weakened")
+                     -- self.game.statusEffectsSystem:removeEffectByName(caster, "Slowed")
+                     print("Cleared negative status effects.")
+    
+                    print(caster.unitType:upper() .. " used Stone Skin!")
+                    return true
+                else
+                    print("WARNING: StatusEffectsSystem not found, cannot apply Stone Skin effects.")
+                     -- Fallback manual implementation (less ideal)
+                     -- caster.immuneToStatusEffects = true
+                     -- Clear existing negative status effects manually
+                     -- if caster.statusEffects then
+                     --     local i = #caster.statusEffects
+                     --     while i >= 1 do
+                     --         local effect = caster.statusEffects[i]
+                     --         -- Add more negative effect names as needed
+                     --         if effect.type == "debuff" or effect.name == "Burning" or effect.name == "Stunned" then
+                     --             table.remove(caster.statusEffects, i)
+                     --             print("Removed negative effect:", effect.name)
+                     --         end
+                     --         i = i - 1
+                     --     end
+                     -- end
+                     -- -- Need a way to handle duration without status system (e.g., turn counter)
+                     -- caster.stoneSkinTurns = 3
+                     -- print(caster.unitType:upper() .. " used Stone Skin! (Manual Fallback)")
+                     -- return true
+                     return false -- Fail if system is missing
                 end
-                
-                -- Set up immunity removal after 3 turns
-                timer.after(3, function()
-                    user.immuneToStatusEffects = false
-                    print(user.unitType:upper() .. " is no longer immune to status effects")
-                end)
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Stone Skin!")
-                
-                return true
             end
         },
-        
+    
         -- BISHOP ABILITIES
-        
-        -- Healing Light: Heal self and adjacent allies
+    
         healing_light = {
             id = "healing_light",
             name = "Healing Light",
@@ -352,471 +540,676 @@ function SpecialAbilitiesSystem:initialize(game)
             actionPointCost = 1,
             cooldown = 2,
             targetType = "self",
-            range = 0,
+            attackRange = 0, -- AoE originates from self
             unitType = "bishop",
-            onUse = function(user, target, x, y)
+            onUse = function(caster, target, x, y, grid) -- target is caster
+                local healAmount = math.ceil(caster.stats.maxHealth * 0.3) -- Or based on caster's magic/attack stat?
+                local healedSomeone = false
+    
                 -- Heal self
-                local healAmount = math.ceil(user.stats.maxHealth * 0.3)
-                
-                if self.game.combatSystem then
-                    self.game.combatSystem:applyHealing(user, healAmount, {
+                if self.game and self.game.combatSystem then
+                     local selfHealed = self.game.combatSystem:applyHealing(caster, healAmount, {
                         source = "ability",
-                        ability = "healing_light",
-                        user = user
+                        ability = self.id,
+                        caster = caster
                     })
+                    if selfHealed > 0 then
+                        print(caster.unitType:upper() .. " healed self for " .. selfHealed)
+                        healedSomeone = true
+                    end
                 else
-                    user:heal(healAmount)
+                    print("WARNING: CombatSystem not found, cannot apply Healing Light to self.")
+                    -- Fallback direct heal
+                    -- local currentHealth = caster.stats.health
+                    -- caster.stats.health = math.min(caster.stats.maxHealth, caster.stats.health + healAmount)
+                    -- if caster.stats.health > currentHealth then healedSomeone = true end
                 end
-                
-                -- Get adjacent allies
-                local adjacentPositions = {
-                    {x = user.x - 1, y = user.y},
-                    {x = user.x + 1, y = user.y},
-                    {x = user.x, y = user.y - 1},
-                    {x = user.x, y = user.y + 1}
-                }
-                
-                for _, pos in ipairs(adjacentPositions) do
-                    local entity = user.grid:getEntityAt(pos.x, pos.y)
-                    if entity and entity.faction == user.faction then
-                        -- Heal ally
-                        if self.game.combatSystem then
-                            self.game.combatSystem:applyHealing(entity, healAmount, {
-                                source = "ability",
-                                ability = "healing_light",
-                                user = user
-                            })
-                        else
-                            entity:heal(healAmount)
+    
+                -- Check adjacent allies
+                local adjacentOffsets = { {dx = -1, dy = 0}, {dx = 1, dy = 0}, {dx = 0, dy = -1}, {dx = 0, dy = 1} }
+                for _, offset in ipairs(adjacentOffsets) do
+                    local checkX = caster.x + offset.dx
+                    local checkY = caster.y + offset.dy
+                    if grid:isInBounds(checkX, checkY) then
+                        local entity = grid:getEntityAt(checkX, checkY)
+                        -- Target allies only (and not self again)
+                        if entity and entity ~= caster and entity.faction == caster.faction and entity.stats then
+                            if self.game and self.game.combatSystem then
+                                 local allyHealed = self.game.combatSystem:applyHealing(entity, healAmount, {
+                                    source = "ability",
+                                    ability = self.id,
+                                    caster = caster
+                                })
+                                if allyHealed > 0 then
+                                    print("Healing Light healed " .. entity.unitType .. " for " .. allyHealed)
+                                    healedSomeone = true
+                                end
+                            else
+                                 print("WARNING: CombatSystem not found, cannot apply Healing Light to ally " .. entity.unitType)
+                                  -- Fallback direct heal
+                                  -- local currentHealth = entity.stats.health
+                                  -- entity.stats.health = math.min(entity.stats.maxHealth, entity.stats.health + healAmount)
+                                  -- if entity.stats.health > currentHealth then healedSomeone = true end
+                            end
                         end
                     end
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Healing Light!")
-                
-                return true
+    
+                 if healedSomeone then
+                    print(caster.unitType:upper() .. " used Healing Light!")
+                 else
+                     print(caster.unitType:upper() .. " used Healing Light, but no one needed healing.")
+                 end
+    
+                return true -- Ability was used, even if no healing occurred due to full health
             end
         },
-        
-        -- Mystic Barrier: Create impassable barriers
+    
         mystic_barrier = {
             id = "mystic_barrier",
             name = "Mystic Barrier",
-            description = "Create impassable barriers",
+            description = "Create temporary impassable barriers",
             icon = nil,
             energyCost = 5,
             actionPointCost = 1,
             cooldown = 3,
             targetType = "position",
-            range = 3,
+            attackRange = 3, -- Range to place the barrier
             unitType = "bishop",
-            onUse = function(caster, target, x, y, grid)
+            onUse = function(caster, target, x, y, grid) -- target might be nil or entity at x,y
                 -- Check if target position is valid
                 if not x or not y or not grid:isInBounds(x, y) then
+                     print("Mystic Barrier: Target position out of bounds.")
                     return false
                 end
-                
-                -- Check if position is reachable
+    
+                -- Check if position is within attackRange
                 local distance = math.abs(caster.x - x) + math.abs(caster.y - y)
-                if distance > 4 then
+                if distance > self.attackRange then
+                     print("Mystic Barrier: Target position out of attackRange.")
                     return false
                 end
-                
-                -- Check if position is empty
+    
+                -- Check if position is empty (cannot place on top of units/other barriers)
                 if grid:getEntityAt(x, y) then
+                     print("Mystic Barrier: Target position is occupied.")
                     return false
                 end
-                
+    
                 -- Create barrier entity
+                -- Ideally use a factory: local barrier = self.game.entityFactory:create("mystic_barrier", { x=x, y=y, duration=3, creator=caster })
+                -- Simple placeholder implementation:
                 local barrier = {
-                    type = "barrier",
+                    id = "barrier_" .. x .. "_" .. y .. "_" .. os.time(), -- Unique-ish ID
+                    type = "obstacle", -- Or "barrier"
+                    unitType = "Mystic Barrier", -- Display name
                     x = x,
                     y = y,
-                    isBarrier = true,
-                    duration = 3,
-                    creator = caster
+                    isImpassable = true, -- Blocks movement
+                    isTargetable = false, -- Cannot be attacked? Or maybe has health?
+                    stats = { health = 1, maxHealth = 1 }, -- Give it 1 HP so it can be removed if needed?
+                    faction = "neutral", -- Or caster's faction?
+                    -- How duration is handled depends on the game loop/timer system
+                    creationTurn = self.game and self.game.turnSystem and self.game.turnSystem:getTurnNumber() or 0,
+                    durationTurns = 3,
+                    caster = caster
                 }
-                
+    
+                 -- Add a method for removal, to be called by a timer or turn system
+                 barrier.destroy = function(self)
+                     print("Mystic Barrier at (" .. self.x .. "," .. self.y .. ") dissipates.")
+                     grid:removeEntity(self) -- Assumes grid can find entity by object reference
+                 end
+    
                 -- Place barrier on grid
-                grid:placeEntity(barrier, x, y)
-                
+                local placed = grid:placeEntity(barrier, x, y)
+    
+                if not placed then
+                     print("Mystic Barrier: Failed to place barrier on grid (grid:placeEntity returned false).")
+                     return false -- Grid placement failed
+                end
+    
                 -- Set up barrier removal
-                timer.after(3, function()
-                    grid:removeEntity(barrier)
-                    print("Mystic Barrier dissipates")
-                end)
-                
-                -- Visual feedback
-                print(caster.unitType:upper() .. " used Mystic Barrier!")
-                
+                -- Requires a timer system that can track turns and call the destroy method
+                if self.game and self.game.timerSystem then
+                     self.game.timerSystem:addTurnEndEvent(barrier.creationTurn + barrier.durationTurns, function()
+                         -- Check if barrier still exists before removing
+                         local currentEntity = grid:getEntityAt(barrier.x, barrier.y)
+                         if currentEntity == barrier then
+                             barrier:destroy()
+                         end
+                     end)
+                else
+                     print("WARNING: TimerSystem not found. Mystic Barrier duration may not function correctly.")
+                     -- Fallback: No automatic removal, or relies on manual cleanup
+                end
+    
+                print(caster.unitType:upper() .. " created a Mystic Barrier at (" .. x .. "," .. y .. ")!")
                 return true
             end
         },
-        
-        -- Arcane Bolt: Long-range attack that ignores defense
+    
         arcane_bolt = {
             id = "arcane_bolt",
             name = "Arcane Bolt",
-            description = "Long-range attack that ignores defense",
+            description = "Long-attackRange attack that ignores defense",
             icon = nil,
             energyCost = 4,
             actionPointCost = 1,
             cooldown = 2,
             targetType = "enemy",
-            range = 5,
+            attackRange = 5,
             unitType = "bishop",
-            onUse = function(user, target, x, y)
-                if not target or target.faction == user.faction then
+            onUse = function(caster, target, x, y, grid) -- x,y are target's coords
+                if not target or target.faction == caster.faction or not target.stats then
+                     print("Arcane Bolt: Invalid target.")
                     return false
                 end
-                
+    
                 -- Calculate distance
-                local distance = math.abs(user.x - target.x) + math.abs(user.y - target.y)
-                if distance > 5 then
+                local distance = math.abs(caster.x - target.x) + math.abs(caster.y - target.y)
+                if distance > self.attackRange then
+                     print("Arcane Bolt: Target out of attackRange.")
                     return false
                 end
-                
+    
                 -- Deal damage ignoring defense
-                local damage = user.stats.attack
-                
-                if self.game.combatSystem then
+                local damage = caster.stats.attack -- Or maybe a different stat like 'magic'?
+    
+                if self.game and self.game.combatSystem then
                     self.game.combatSystem:applyDirectDamage(target, damage, {
                         source = "ability",
-                        ability = "arcane_bolt",
-                        user = user,
+                        ability = self.id,
+                        caster = caster,
                         ignoreDefense = true,
                         isCritical = false,
-                        isMiss = false
+                        isMiss = false -- Or maybe it can miss based on accuracy vs dodge?
                     })
+                     print(caster.unitType:upper() .. " hit " .. target.unitType .. " with Arcane Bolt for " .. damage .. " damage!")
+                     return true
                 else
-                    -- Manually ignore defense
-                    target.stats.health = math.max(0, target.stats.health - damage)
+                    print("WARNING: CombatSystem not found, cannot apply Arcane Bolt damage.")
+                    -- Fallback direct damage
+                    -- target.stats.health = math.max(0, target.stats.health - damage)
+                    -- print(caster.unitType:upper() .. " hit " .. target.unitType .. " with Arcane Bolt for " .. damage .. " damage! (Direct)")
+                    -- return true
+                    return false -- Fail if damage system missing
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Arcane Bolt!")
-                
-                return true
             end
         },
-        
+    
         -- PAWN ABILITIES
-        
-        -- Shield Bash: Stun adjacent enemy
+    
         shield_bash = {
             id = "shield_bash",
             name = "Shield Bash",
-            description = "Stun adjacent enemy",
+            description = "Damage and potentially stun an adjacent enemy",
             icon = nil,
             energyCost = 3,
             actionPointCost = 1,
             cooldown = 3,
             targetType = "enemy",
-            range = 1,
+            attackRange = 1, -- Adjacent only
             unitType = "pawn",
-            onUse = function(user, target, x, y)
-                if not target or target.faction == user.faction then
+            onUse = function(caster, target, x, y, grid) -- x,y are target's coords
+                if not target or target.faction == caster.faction or not target.stats then
+                    print("Shield Bash: Invalid target.")
                     return false
                 end
-                
+    
                 -- Check if target is adjacent
-                local distance = math.abs(user.x - target.x) + math.abs(user.y - target.y)
-                if distance > 1 then
+                local distance = math.abs(caster.x - target.x) + math.abs(caster.y - target.y)
+                if distance > self.attackRange then -- attackRange is 1 for adjacent
+                    print("Shield Bash: Target not adjacent.")
                     return false
                 end
-                
-                -- Deal damage
-                local damage = math.ceil(user.stats.attack * 0.5)
-                
-                if self.game.combatSystem then
+    
+                -- 1. Deal damage
+                local damage = math.ceil(caster.stats.attack * 0.5)
+                local damageSuccess = false
+                if self.game and self.game.combatSystem then
                     self.game.combatSystem:applyDirectDamage(target, damage, {
                         source = "ability",
-                        ability = "shield_bash",
-                        user = user,
+                        ability = self.id,
+                        caster = caster,
                         isCritical = false,
                         isMiss = false
                     })
+                    print(caster.unitType:upper() .. " dealt " .. damage .. " damage to " .. target.unitType .. " with Shield Bash.")
+                    damageSuccess = true
                 else
-                    target:takeDamage(damage, user)
+                    print("WARNING: CombatSystem not found, cannot apply Shield Bash damage.")
+                    -- Fallback direct damage
+                    -- target.stats.health = math.max(0, target.stats.health - damage)
+                    -- print(caster.unitType:upper() .. " dealt " .. damage .. " damage to " .. target.unitType .. " with Shield Bash (Direct).")
+                    -- damageSuccess = true
                 end
-                
-                -- Apply stun
-                if self.game.statusEffectsSystem then
-                    self.game.statusEffectsSystem:applyEffect(target, "stunned", user)
+    
+                -- Check if target survived damage before stunning
+                if not target or not target.stats or target.stats.health <= 0 then
+                    print(target.unitType .. " was defeated by Shield Bash.")
+                    return damageSuccess -- Return true if damage happened
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Shield Bash!")
-                
-                return true
+    
+                -- 2. Apply stun
+                local stunSuccess = false
+                if self.game and self.game.statusEffectsSystem then
+                     -- Duration might be 1 turn, handled by effect definition
+                    stunSuccess = self.game.statusEffectsSystem:applyEffect(target, "stunned", caster) -- ApplyEffect might return true/false
+                    if stunSuccess then
+                        print(target.unitType .. " is stunned!")
+                    else
+                        print(target.unitType .. " resisted stun.") -- E.g., if immune
+                    end
+                else
+                    print("WARNING: StatusEffectsSystem not found, cannot apply Stun effect.")
+                end
+    
+                print(caster.unitType:upper() .. " used Shield Bash!")
+                return damageSuccess or stunSuccess -- Return true if either damage or stun was applied
             end
         },
-        
-        -- Advance: Move forward and gain temporary attack boost
+    
         advance = {
             id = "advance",
             name = "Advance",
-            description = "Move forward and gain temporary attack boost",
+            description = "Move one step forward and gain temporary attack boost",
             icon = nil,
             energyCost = 2,
             actionPointCost = 1,
             cooldown = 2,
             targetType = "self",
-            range = 0,
+            attackRange = 0, -- Movement is fixed relative to self
             unitType = "pawn",
-            onUse = function(user, target, x, y)
+            onUse = function(caster, target, x, y, grid) -- target is caster, x,y are nil
                 -- Determine forward direction based on faction
                 local dx = 0
-                local dy = 0
-                
-                if user.faction == "player" then
-                    dx = 1 -- Player pawns move right
-                else
-                    dx = -1 -- Enemy pawns move left
-                end
-                
-                local newX = user.x + dx
-                local newY = user.y
-                
-                -- Check if position is valid
-                if not user.grid:isInBounds(newX, newY) then
+                local dy = (caster.faction == "player") and -1 or 1 -- Player moves up (-Y), Enemy moves down (+Y)
+    
+                local newX = caster.x + dx
+                local newY = caster.y + dy
+    
+                -- Check if position is valid and in bounds
+                if not grid:isInBounds(newX, newY) then
+                    print("Advance: Cannot move forward, boundary reached.")
                     return false
                 end
-                
+    
                 -- Check if position is empty
-                if user.grid:getEntityAt(newX, newY) then
+                if grid:getEntityAt(newX, newY) then
+                     print("Advance: Cannot move forward, position blocked.")
                     return false
                 end
-                
-                -- Move forward
-                user.grid:removeEntity(user.x, user.y)
-                user.x = newX
-                user.y = newY
-                user.grid:placeEntity(user, newX, newY)
-                
-                -- Apply attack boost
-                if self.game.statusEffectsSystem then
-                    self.game.statusEffectsSystem:applyEffect(user, "empowered", user)
+    
+                -- Use moveTo to handle position change and animation
+                local moveSuccess = caster:moveTo(newX, newY)
+    
+                if moveSuccess then
+                    -- Apply attack boost status effect *after* successful move
+                    if self.game and self.game.statusEffectsSystem then
+                        -- Assuming 'empowered' increases attack, duration handled by effect
+                        self.game.statusEffectsSystem:applyEffect(caster, "empowered", caster)
+                         print("Gained Empowered buff.")
+                    else
+                        print("WARNING: StatusEffectsSystem not found, cannot apply Empowered buff.")
+                    end
+    
+                    print(caster.unitType:upper() .. " used Advance!")
+                    return true -- Ability use was successful
+                else
+                    -- moveTo failed
+                    print(caster.unitType:upper() .. " failed to Advance (moveTo returned false).")
+                    return false -- Ability use failed
                 end
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Advance!")
-                
-                return true
             end
         },
-        
-        -- Promotion: Transform into a stronger unit at the cost of health
+    
         promotion = {
             id = "promotion",
             name = "Promotion",
-            description = "Transform into a stronger unit at the cost of health",
+            description = "Transform into a stronger unit (Queen) at the cost of health",
             icon = nil,
             energyCost = 8,
             actionPointCost = 1,
-            cooldown = 0, -- Can only be used once
+            cooldown = 0, -- Can only be used once (needs mechanism to track usage or remove ability)
             targetType = "self",
-            range = 0,
+            attackRange = 0,
             unitType = "pawn",
-            onUse = function(user, target, x, y)
-                -- Check if pawn has enough health
-                if user.stats.health < user.stats.maxHealth * 0.5 then
+            onUse = function(caster, target, x, y, grid) -- target is caster
+                -- Check usage limit (this ability should probably be removed after use)
+                if caster.promoted then -- Add a flag to the caster instance
+                     print("Promotion: Already promoted.")
+                     return false
+                end
+    
+                -- Check if pawn is on the back rank (optional, common chess rule)
+                local backRankY = (caster.faction == "player") and 0 or (grid:getHeight() - 1) -- Assuming 0-indexed grid
+                if caster.y ~= backRankY then
+                     print("Promotion: Must be on the back rank to promote.")
+                     -- return false -- Enable this check if required by game rules
+                end
+    
+                -- Check health cost
+                local healthCost = math.ceil(caster.stats.maxHealth * 0.5) -- Cost is 50% of *max* health
+                if caster.stats.health <= healthCost then
+                    print("Promotion: Not enough health to promote (requires > " .. healthCost .. ").")
                     return false
                 end
-                
-                -- Reduce health
-                user.stats.health = math.ceil(user.stats.health * 0.5)
-                
-                -- Increase stats
-                user.stats.attack = user.stats.attack + 2
-                user.stats.defense = user.stats.defense + 1
-                user.stats.moveRange = user.stats.moveRange + 1
-                
-                -- Change unit type
-                user.unitType = "queen"
-                
-                -- Update abilities
-                user.abilities = {"sovereign_wrath", "royal_decree", "strategic_repositioning"}
-                
+    
+                -- Apply health cost
+                if self.game and self.game.combatSystem then
+                     self.game.combatSystem:applyDirectDamage(caster, healthCost, {
+                         source = "ability",
+                         ability = self.id,
+                         caster = caster,
+                         ignoreDefense = true, -- Cost ignores defense/shields
+                         bypassShields = true
+                     })
+                     print("Paid " .. healthCost .. " health for Promotion.")
+                else
+                     print("WARNING: CombatSystem not found, applying health cost directly.")
+                     caster.stats.health = caster.stats.health - healthCost
+                     -- Need to ensure health doesn't drop below 1 if that's a rule
+                     caster.stats.health = math.max(1, caster.stats.health)
+                end
+    
+    
+                -- Change unit type and stats
+                -- This is highly dependent on how units/classes are structured.
+                -- Simple direct modification:
+                print("Promoting Pawn to Queen...")
+                caster.unitType = "queen" -- Update display/logic type
+                caster.name = caster.name .. " (Queen)" -- Optional: Change instance name
+    
+                -- Update base stats (or apply a permanent "Promoted" status effect that grants bonuses)
+                -- These values should ideally come from a "Queen" template
+                caster.stats.maxHealth = caster.stats.maxHealth + 20 -- Example boost
+                caster.stats.attack = caster.stats.attack + 3       -- Example boost
+                caster.stats.defense = caster.stats.defense + 2     -- Example boost
+                caster.stats.moveRange = 4                          -- Example Queen move attackRange
+                -- Heal to new max health? Or keep current percentage? Let's keep current health for now.
+                -- caster.stats.health = caster.stats.maxHealth -- Option: Full heal on promotion
+    
+    
+                -- Update abilities (replace pawn abilities with queen abilities)
+                -- Assumes queen abilities are defined elsewhere (e.g., in self.game.abilityData)
+                local queenAbilityIDs = {"sovereign_wrath", "royal_decree", "strategic_repositioning"} -- Example IDs
+                caster.abilities = {} -- Clear existing abilities (or filter based on type?)
+                 if self.game and self.game.abilityData then
+                     for _, abilityId in ipairs(queenAbilityIDs) do
+                         if self.game.abilityData[abilityId] then
+                            -- Add the *ID* or the full ability definition? Depends on how units store abilities. Assume ID.
+                            table.insert(caster.abilities, abilityId)
+                         else
+                            print("Warning: Queen ability not found:", abilityId)
+                         end
+                     end
+                 else
+                     print("Warning: Ability data not found. Cannot assign Queen abilities.")
+                 end
+    
                 -- Reset ability cooldowns
-                user.abilityCooldowns = {}
-                
-                -- Visual feedback
-                print(user.unitType:upper() .. " used Promotion and transformed into a QUEEN!")
-                
+                caster.abilityCooldowns = {}
+    
+                -- Mark as promoted to prevent reuse
+                caster.promoted = true
+    
+                -- Potentially remove the "promotion" ability itself from the caster's list
+                for i = #caster.abilities, 1, -1 do
+                    if caster.abilities[i] == self.id then
+                        table.remove(caster.abilities, i)
+                        break
+                    end
+                end
+    
+    
+                -- Visual feedback / Log
+                print(caster.name .. " used Promotion and transformed into a QUEEN!")
+    
+                -- Update UI / Visuals if necessary
+                if caster.sprite then
+                    -- caster.sprite:loadTexture("path/to/queen_sprite.png") -- Example
+                end
+    
                 return true
             end
         },
-
-        -- Damage abilities
+    
+        -- GENERIC ABILITIES (add unitType = nil for consistency)
+    
         fireball = {
             id = "fireball",
             name = "Fireball",
-            description = "Launch a fireball that deals 5 damage to target and 2 damage to adjacent tiles.",
+            description = "Launch a fireball dealing area damage.",
             icon = nil,
             energyCost = 3,
             actionPointCost = 1,
             cooldown = 2,
-            range = 3,
-            targetType = "position", -- can target enemy, ally, tile, self
-            onUse = function(self, caster, target, x, y, grid)
-                -- Deal damage to primary target
+            attackRange = 3,
+            targetType = "position", -- Target ground/unit
+            unitType = nil, -- Generic ability, usable by units assigned it
+            onUse = function(caster, target, x, y, grid) -- target is entity at x,y, or nil
+                -- Validate target position (already checked by core system before calling onUse, but double check)
+                if not x or not y or not grid:isInBounds(x, y) then return false end
+    
                 local primaryDamage = 5
-                if target and target.stats then
-                    target.stats.health = math.max(0, target.stats.health - primaryDamage)
-                    print(target.unitType .. " took " .. primaryDamage .. " damage from fireball")
-                end
-                
-                -- Deal splash damage to adjacent tiles
                 local splashDamage = 2
-                local adjacentPositions = {
-                    {x-1, y}, {x+1, y}, {x, y-1}, {x, y+1}
-                }
-                
-                for _, pos in ipairs(adjacentPositions) do
-                    local adjacentEntity = grid:getEntityAt(pos[1], pos[2])
-                    if adjacentEntity and adjacentEntity.stats and adjacentEntity.faction ~= caster.faction then
-                        adjacentEntity.stats.health = math.max(0, adjacentEntity.stats.health - splashDamage)
-                        print(adjacentEntity.unitType .. " took " .. splashDamage .. " splash damage from fireball")
+                local actionSuccess = false
+    
+                -- Apply damage to primary target (if it's a unit)
+                if target and target.stats and target.faction ~= caster.faction then -- Check if target is an enemy unit
+                    if self.game and self.game.combatSystem then
+                        self.game.combatSystem:applyDirectDamage(target, primaryDamage, {
+                            source = "ability", ability = self.id, caster = caster })
+                        print(target.unitType .. " took " .. primaryDamage .. " primary damage from Fireball.")
+                        actionSuccess = true
+                    else
+                        print("WARNING: CombatSystem not found for Fireball primary damage.")
+                    end
+                elseif target and target.stats and target.faction == caster.faction then
+                     -- Hit an ally with primary target? Maybe reduce damage? Or allow friendly fire?
+                     print("Fireball hit an allied unit: " .. target.unitType)
+                     -- Decide if friendly fire applies
+                end
+    
+    
+                -- Apply splash damage to adjacent tiles (excluding center)
+                 local adjacentOffsets = { {dx = -1, dy = 0}, {dx = 1, dy = 0}, {dx = 0, dy = -1}, {dx = 0, dy = 1},
+                                          {dx = -1, dy = -1}, {dx = 1, dy = -1}, {dx = -1, dy = 1}, {dx = 1, dy = 1} } -- 8 directions
+                for _, offset in ipairs(adjacentOffsets) do
+                    local splashX = x + offset.dx
+                    local splashY = y + offset.dy
+    
+                    if grid:isInBounds(splashX, splashY) then
+                        local adjacentEntity = grid:getEntityAt(splashX, splashY)
+                        -- Only damage enemy units in splash zone
+                        if adjacentEntity and adjacentEntity.stats and adjacentEntity.faction ~= caster.faction then
+                            if self.game and self.game.combatSystem then
+                                self.game.combatSystem:applyDirectDamage(adjacentEntity, splashDamage, {
+                                    source = "ability", ability = self.id, caster = caster, isSplash = true })
+                                 print(adjacentEntity.unitType .. " took " .. splashDamage .. " splash damage from Fireball.")
+                                 actionSuccess = true -- Mark success if splash hits
+                            else
+                                 print("WARNING: CombatSystem not found for Fireball splash damage.")
+                            end
+                        end
                     end
                 end
-                
-                -- Visual effect (would be implemented with particles)
-                print("Fireball visual effect at " .. x .. "," .. y)
-                
-                return true
+    
+                -- Visual effect
+                print("Fireball visual effect detonated at " .. x .. "," .. y)
+    
+                return actionSuccess -- Return true if any damage was dealt
             end
         },
-        
-        -- Healing abilities
+    
         heal = {
             id = "heal",
             name = "Heal",
-            description = "Restore 5 health to target unit.",
+            description = "Restore health to an allied unit.",
             icon = nil,
             energyCost = 2,
             actionPointCost = 1,
             cooldown = 1,
-            range = 2,
-            targetType = "ally", -- can target enemy, ally, tile, self
-            onUse = function(self, caster, target, x, y, grid)
-                if not target or not target.stats then
+            attackRange = 2,
+            targetType = "ally", -- Only targets allies
+            unitType = nil, -- Generic
+            onUse = function(caster, target, x, y, grid) -- target is the allied unit
+                if not target or target.faction ~= caster.faction or not target.stats then
+                    print("Heal: Invalid target (not an ally or no stats).")
+                    return false -- Should be caught by targetType, but double check
+                end
+    
+                -- Check attackRange (Should be caught by core system, but double check)
+                local distance = math.abs(caster.x - target.x) + math.abs(caster.y - target.y)
+                if distance > self.attackRange then
+                    print("Heal: Target out of attackRange.")
                     return false
                 end
-                
-                -- Heal target
-                local healAmount = 5
-                target.stats.health = math.min(target.stats.maxHealth, target.stats.health + healAmount)
-                print(target.unitType .. " healed for " .. healAmount)
-                
-                -- Visual effect
-                print("Heal visual effect on " .. target.unitType)
-                
-                return true
+    
+                -- Apply healing
+                local healAmount = 5 -- Or based on caster stat?
+                local healed = 0
+                if self.game and self.game.combatSystem then
+                    healed = self.game.combatSystem:applyHealing(target, healAmount, {
+                        source = "ability", ability = self.id, caster = caster })
+                     if healed > 0 then
+                        print(caster.unitType .. " healed " .. target.unitType .. " for " .. healed .. " health.")
+                     else
+                         print(target.unitType .. " is already at full health.")
+                     end
+                     -- Visual effect
+                     print("Heal visual effect on " .. target.unitType)
+                     return true -- Success even if target was full health
+                else
+                    print("WARNING: CombatSystem not found, cannot apply Heal.")
+                    return false
+                end
             end
         },
-        
-        -- Utility abilities
+    
         teleport = {
             id = "teleport",
             name = "Teleport",
-            description = "Teleport to target empty tile within range.",
+            description = "Instantly move to an empty tile within attackRange.",
             icon = nil,
             energyCost = 4,
             actionPointCost = 1,
             cooldown = 3,
-            range = 5,
-            targetType = "position",
-            onUse = function(self, caster, target, x, y, grid)
-                -- Check if tile is valid and empty
-                if not grid:isValidPosition(x, y) or grid:getEntityAt(x, y) then
+            attackRange = 5,
+            targetType = "position", -- Target empty tile
+            unitType = nil, -- Generic
+            onUse = function(caster, target, x, y, grid) -- target is nil (or maybe entity if mis-targeted?)
+                 -- Check if tile is valid and empty (Core system should validate this based on targetType, but check again)
+                if not x or not y or not grid:isInBounds(x, y) then
+                     print("Teleport: Target position out of bounds.")
                     return false
                 end
-                
-                -- Move from current position
-                grid:removeEntity(caster)
-                
-                -- Update position
+                if grid:getEntityAt(x, y) then
+                     print("Teleport: Target position is occupied.")
+                    return false -- Cannot teleport to occupied tile
+                end
+    
+                 -- Check attackRange
+                local distance = math.abs(caster.x - x) + math.abs(caster.y - y)
+                if distance > self.attackRange then
+                     print("Teleport: Target position out of attackRange.")
+                    return false
+                end
+                 if distance == 0 then
+                     print("Teleport: Cannot teleport to current position.")
+                     return false
+                 end
+    
+                -- Use moveTo for teleportation (assuming moveTo handles instant movement/animation type)
                 local oldX, oldY = caster.x, caster.y
-                caster.x = x
-                caster.y = y
-                
-                -- Place at new position
-                grid:placeEntity(caster, x, y)
-                
-                -- Visual effect
-                print("Teleport visual effect from " .. oldX .. "," .. oldY .. " to " .. x .. "," .. y)
-                
-                return true
+                local moveSuccess = caster:moveTo(x, y) -- Pass target coordinates
+    
+                if moveSuccess then
+                    -- Visual effect
+                    print(caster.unitType .. " teleported from " .. oldX .. "," .. oldY .. " to " .. x .. "," .. y)
+                    return true
+                else
+                    print(caster.unitType .. " failed to Teleport (moveTo returned false).")
+                    return false
+                end
             end
         },
-        
-        -- Buff abilities
+    
         strengthen = {
             id = "strengthen",
             name = "Strengthen",
-            description = "Increase target's attack by 2 for 2 turns.",
+            description = "Increase target ally's attack for 2 turns.",
             icon = nil,
             energyCost = 3,
             actionPointCost = 1,
             cooldown = 3,
-            range = 1,
+            attackRange = 1, -- Close attackRange buff
             targetType = "ally",
-            onUse = function(self, caster, target, x, y, grid)
-                if not target or not target.stats then
+            unitType = nil, -- Generic
+            onUse = function(caster, target, x, y, grid) -- target is the allied unit
+                if not target or target.faction ~= caster.faction or not target.stats then
+                    print("Strengthen: Invalid target.")
                     return false
                 end
-                
-                -- Apply buff
-                local attackBuff = 2
-                target.stats.attack = target.stats.attack + attackBuff
-                
-                -- Store original value to restore later
-                target.attackBuffExpiry = target.attackBuffExpiry or {}
-                table.insert(target.attackBuffExpiry, {
-                    value = attackBuff,
-                    turnsLeft = 2
-                })
-                
-                print(target.unitType .. " attack increased by " .. attackBuff .. " for 2 turns")
-                
-                -- Visual effect
-                print("Strengthen visual effect on " .. target.unitType)
-                
-                return true
+    
+                -- Check attackRange
+                local distance = math.abs(caster.x - target.x) + math.abs(caster.y - target.y)
+                if distance > self.attackRange then
+                    print("Strengthen: Target out of attackRange.")
+                    return false
+                end
+    
+                -- Apply buff using status effect system
+                if self.game and self.game.statusEffectsSystem then
+                     -- Assuming effect "strengthened" exists and handles attack bonus + duration
+                     -- Pass parameters if the effect definition needs them
+                    local success = self.game.statusEffectsSystem:applyEffect(target, "strengthened", caster, { duration = 2, attackBonus = 2 })
+                    if success then
+                        print(target.unitType .. "'s attack increased for 2 turns.")
+                        -- Visual effect
+                        print("Strengthen visual effect on " .. target.unitType)
+                        return true
+                    else
+                        print("Failed to apply Strengthen effect (maybe resisted or system error).")
+                        return false
+                    end
+                else
+                    print("WARNING: StatusEffectsSystem not found, cannot apply Strengthen buff.")
+                    return false
+                end
             end
         },
-        
-        -- Defensive abilities
+    
         shield = {
             id = "shield",
             name = "Shield",
-            description = "Gain +3 defense until your next turn.",
+            description = "Gain increased defense until your next turn.",
             icon = nil,
             energyCost = 2,
             actionPointCost = 1,
             cooldown = 2,
-            range = 0,
+            attackRange = 0,
             targetType = "self",
-            onUse = function(self, caster, target, x, y, grid)
-                -- Apply shield
-                local defenseBuff = 3
-                caster.stats.defense = caster.stats.defense + defenseBuff
-                
-                -- Store original value to restore later
-                caster.defenseBuffExpiry = caster.defenseBuffExpiry or {}
-                table.insert(caster.defenseBuffExpiry, {
-                    value = defenseBuff,
-                    turnsLeft = 1
-                })
-                
-                print(caster.unitType .. " defense increased by " .. defenseBuff .. " until next turn")
-                
-                -- Visual effect
-                print("Shield visual effect on " .. caster.unitType)
-                
-                return true
+            unitType = nil, -- Generic
+            onUse = function(caster, target, x, y, grid) -- target is caster
+                 -- Apply buff using status effect system
+                if self.game and self.game.statusEffectsSystem then
+                    -- Assuming effect "shielded" exists and handles defense bonus + duration (1 turn)
+                    local success = self.game.statusEffectsSystem:applyEffect(caster, "shielded", caster, { duration = 1, defenseBonus = 3 })
+                     if success then
+                        print(caster.unitType .. " gained increased defense until next turn.")
+                        -- Visual effect
+                        print("Shield visual effect on " .. caster.unitType)
+                        return true
+                     else
+                        print("Failed to apply Shield effect.")
+                        return false
+                     end
+                else
+                    print("WARNING: StatusEffectsSystem not found, cannot apply Shield buff.")
+                    return false
+                end
             end
         }
     }
@@ -870,11 +1263,11 @@ function SpecialAbilitiesSystem:canUseAbility(unit, abilityId, target, x, y)
         return false
     end
     
-    -- Check range
-    if ability.range > 0 then
+    -- Check attackRange
+    if ability.attackRange > 0 then
         local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
-        if distance > ability.range then
-            print("Target is out of range")
+        if distance > ability.attackRange then
+            print("Target is out of attackRange")
             return false
         end
     end
@@ -894,40 +1287,80 @@ function SpecialAbilitiesSystem:canUseAbility(unit, abilityId, target, x, y)
     return true
 end
 
--- Use an ability
-function SpecialAbilitiesSystem:useAbility(unit, abilityId, target, x, y)
+-- Use an ability (MODIFIED: Trigger animation)
+function SpecialAbilitiesSystem:useAbility(unit, abilityId, target, x, y, grid)
     local ability = self:getAbility(abilityId)
     if not ability then
         print("Ability not found: " .. abilityId)
         return false
     end
     
-    -- Check if ability can be used
-    if not self:canUseAbility(unit, abilityId, target, x, y) then
-        print("Cannot use ability: " .. abilityId)
-        return false
+    -- Check if ability can be used (already includes AP/cooldown checks via unit:canUseAbility)
+    -- We re-check here just before execution for safety, though unit:canUseAbility should be the primary gate
+    local canUse, reason = unit:canUseAbility(abilityId, target, x, y)
+     if not canUse then
+         print("Cannot use ability: " .. abilityId .. " Reason: " .. (reason or 'Unknown'))
+         return false, reason or "Cannot use ability"
+     end
+
+     -- *** ADD: Trigger Animation ***
+    local animationManager = self.game.animationManager
+    local targetPosition = nil
+    if x and y then targetPosition = {x=x, y=y} end -- Create position table if coords exist
+
+    if animationManager then
+        -- *** FIX: Call method on the instance using ':' ***
+        local specificAnimationFunc = animationManager:getAbilityAnimation(abilityId)
+        -- *** END FIX ***
+
+        if specificAnimationFunc then
+            print("Triggering specific animation for:", abilityId)
+            -- Call the specific function (it's already retrieved)
+            specificAnimationFunc(unit, targetPosition, animationManager)
+        else
+            print("Triggering generic animation for:", abilityId)
+            local genericAbilityType = "default" -- Determine type...
+            if ability.name:find("Heal") or ability.name:find("Bless") then genericAbilityType = "support" elseif ability.name:find("Shield") or ability.name:find("Fortify") or ability.name:find("Skin") then genericAbilityType = "defense" elseif ability.name:find("Charge") or ability.name:find("Bash") or ability.name:find("Bolt") or ability.name:find("Wrath") then genericAbilityType = "attack" end
+            animationManager:createAbilityAnimation(unit, genericAbilityType, targetPosition, grid, function() unit.animationState = "idle" end)
+        end
+        unit.animationState = "casting"
+    else
+        print("WARNING: AnimationManager not found, skipping ability animation.")
     end
+    -- *** END ADD ***
     
     -- Apply energy cost
-    unit.energy = math.max(0, unit.energy - ability.energyCost)
-    unit.stats.energy = unit.energy
-    
+    -- unit.energy = math.max(0, unit.energy - ability.energyCost) -- This should be handled by unit:useAbility
+    -- unit.stats.energy = unit.energy
+    if unit.useEnergy then unit:useEnergy(ability.energyCost or 0) end -- Use unit method if exists
+
     -- Apply cooldown
-    unit:setAbilityCooldown(abilityId, ability.cooldown)
-    
+    unit:setAbilityCooldown(abilityId, ability.cooldown or 0)
+
     -- Mark as having used an ability this turn
     unit.hasUsedAbility = true
-    
+    -- Deduct Action Point via TurnManager
+    if self.game.turnManager then
+        self.game.turnManager:useActionPoints(ability.actionPointCost or 1)
+    end
+
     -- Execute ability effect
-    local grid = self.game.grid
-    local success = ability.onUse(unit, target, x, y, grid)
-    
-    -- Check if any units were defeated
-    --if self.game then
-    --    self.game:checkGameOver()
-    --end
-    
-    return success
+    local success = false
+    if ability.onUse then
+        -- Pass 'self' (SpecialAbilitiesSystem instance) if onUse needs it
+        success = ability.onUse(unit, target, x, y, grid)
+    else
+        print("Warning: Ability " .. abilityId .. " has no onUse function.")
+        success = true -- Assume success if no function, but log warning
+    end
+
+    -- Check if any units were defeated (CombatSystem should handle this via damage application)
+    -- if self.game.combatSystem and self.game.combatSystem.checkDefeat then
+    --    self.game.combatSystem:checkDefeat(target)
+    --    self.game.combatSystem:checkDefeat(unit) -- If self-damage possible
+    -- end
+
+    return success -- Return success of the ability's *logic*
 end
 
 -- Process buff expirations for a unit
@@ -980,7 +1413,7 @@ function SpecialAbilitiesSystem:getValidTargets(unit, abilityId)
     local targets = {}
     local grid = self.game.grid
     
-    -- Get targets based on ability target type and range
+    -- Get targets based on ability target type and attackRange
     if ability.targetType == "self" then
         -- Self-targeted ability
         targets = {{x = unit.x, y = unit.y, unit = unit}}
@@ -991,7 +1424,7 @@ function SpecialAbilitiesSystem:getValidTargets(unit, abilityId)
                 local entity = grid:getEntityAt(x, y)
                 if entity and entity.faction == unit.faction then
                     local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
-                    if distance <= ability.range then
+                    if distance <= ability.attackRange then
                         table.insert(targets, {x = x, y = y, unit = entity})
                     end
                 end
@@ -1004,7 +1437,7 @@ function SpecialAbilitiesSystem:getValidTargets(unit, abilityId)
                 local entity = grid:getEntityAt(x, y)
                 if entity and entity.faction ~= unit.faction then
                     local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
-                    if distance <= ability.range then
+                    if distance <= ability.attackRange then
                         table.insert(targets, {x = x, y = y, unit = entity})
                     end
                 end
@@ -1012,11 +1445,11 @@ function SpecialAbilitiesSystem:getValidTargets(unit, abilityId)
         end
     elseif ability.targetType == "position" then
         -- Position-targeted ability
-        for y = math.max(1, unit.y - ability.range), math.min(grid.height, unit.y + ability.range) do
-            for x = math.max(1, unit.x - ability.range), math.min(grid.width, unit.x + ability.range) do
-                -- Check if within range (Manhattan distance)
+        for y = math.max(1, unit.y - ability.attackRange), math.min(grid.height, unit.y + ability.attackRange) do
+            for x = math.max(1, unit.x - ability.attackRange), math.min(grid.width, unit.x + ability.attackRange) do
+                -- Check if within attackRange (Manhattan distance)
                 local distance = math.abs(unit.x - x) + math.abs(unit.y - y)
-                if distance <= ability.range then
+                if distance <= ability.attackRange then
                     -- For position targets, we don't need a unit
                     table.insert(targets, {x = x, y = y, unit = grid:getEntityAt(x, y)})
                 end
@@ -1086,7 +1519,7 @@ function SpecialAbilitiesSystem:debugAbilities()
         print("   Energy Cost: " .. (ability.energyCost or 0))
         print("   Cooldown: " .. (ability.cooldown or 0))
         print("   Target Type: " .. (ability.targetType or "unknown"))
-        print("   Range: " .. (ability.range or 0))
+        print("   Range: " .. (ability.attackRange or 0))
         print("   Has execute function: " .. tostring(ability.onUse ~= nil))
         print("")
     end

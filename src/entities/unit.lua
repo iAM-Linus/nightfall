@@ -207,7 +207,6 @@ function Unit:isActionPrevented()
     return false
 end
 
-
 -- Draw the unit using animation properties
 function Unit:draw()
     -- Basic checks
@@ -336,7 +335,6 @@ function Unit:drawActionIndicators(screenX, screenY, tileSize)
     end
 end
 
-
 -- Reset action state for a new turn
 function Unit:resetActionState()
     self.hasMoved = false
@@ -422,7 +420,6 @@ function Unit:gainActionPoints(amount)
     self.stats.actionPoints = math.min(self.stats.actionPoints + amount, self.stats.maxActionPoints)
 end
 
-
 -- *** NEW: Helper function to use AP (optional, TurnManager handles deduction mainly) ***
 -- We might not need this if TurnManager handles deduction centrally
     function Unit:useActionPoints(amount)
@@ -433,7 +430,6 @@ end
     end
     return false
 end
-
 
 -- Add status effect (more robust, handles duration timer)
 function Unit:addStatusEffect(effect)
@@ -610,7 +606,7 @@ function Unit:useAbility(abilityId, target, x, y)
     end
 
     -- Attempt to use the ability via the system
-    local success, message = self.game.specialAbilitiesSystem:useAbility(self, abilityId, target, x, y)
+    local success, message = self.game.specialAbilitiesSystem:useAbility(self, abilityId, target, x, y, self.grid)
 
     if success then
         -- System should handle energy cost and cooldown setting
@@ -656,13 +652,13 @@ function Unit:canUseAbility(abilityId)
         return false, "Not enough action points (" .. (self.stats and self.stats.actionPoints or 'N/A') .. "/" .. requiredAP .. ")"
     end
 
-    --[[ -- Old check using TurnManager's global AP
-    if self.game.turnManager and self.game.turnManager.currentActionPoints < requiredAP then
-       return false, "Not enough action points"
+    -- Check range if target coordinates are provided
+    if ability.attackRange > 0 and x and y then
+        local distance = math.abs(self.x - x) + math.abs(self.y - y)
+        if distance > ability.attackRange then
+            return false, "Target out of range (" .. distance .. "/" .. ability.attackRange .. ")"
+        end
     end
-    ]]
-
-    -- TODO: Add range/target checks if needed for specific UI feedback
 
     return true -- If all checks pass
 end
@@ -787,24 +783,23 @@ function Unit:showAbilityEffect(abilityType)
     self.animationTimer = 0
 end
 
--- MoveTo that integrates with animation manager
+-- MoveTo that integrates with animation manager (MODIFIED: Ensure final snap in callback)
 function Unit:moveTo(targetX, targetY)
     local oldX, oldY = self.x, self.y
 
     -- Check grid walkability before logical move
     if not self.grid or not self.grid:isWalkable(targetX, targetY) then
          print(string.format("Unit %s cannot move to unwalkable tile (%d,%d)", self.id or "N/A", targetX, targetY))
-         return false -- Cannot move logically
+         return false
     end
 
     -- Update logical position immediately
     self.x = targetX
     self.y = targetY
 
-    -- Update grid's internal state (important!)
+    -- Update grid's internal state
     if self.grid and self.grid.moveEntity then
          if not self.grid:moveEntity(self, targetX, targetY) then
-              -- If grid move fails (e.g., tile became occupied), revert logical position
               print(string.format("Grid move failed for unit %s to (%d,%d). Reverting.", self.id or "N/A", targetX, targetY))
               self.x, self.y = oldX, oldY
               return false
@@ -815,24 +810,31 @@ function Unit:moveTo(targetX, targetY)
 
     -- Trigger animation if manager exists
     if self.game and self.game.animationManager then
-        -- Set animation direction
         if targetX > oldX then self.animationDirection = 1
         elseif targetX < oldX then self.animationDirection = -1 end
 
-        -- Create movement animation
+        -- *** FIX: Define the onComplete callback with final snap ***
+        local onAnimComplete = function()
+            self.animationState = "idle"
+            -- Ensure visual position matches logical position at the very end
+            self.visualX = self.x
+            self.visualY = self.y
+            self.offset = {x = 0, y = 0} -- Reset offset just in case
+            self.scale = {x = 1, y = 1} -- Reset scale
+            self.rotation = 0 -- Reset rotation
+            print(string.format("Movement animation complete for %s at final pos (%d,%d)", self.id or "N/A", self.x, self.y))
+        end
+        -- *** END FIX ***
+
+        -- Create movement animation, passing the enhanced callback
         local animId = self.game.animationManager:createMovementAnimation(
-            self, targetX, targetY,
-            function() -- onComplete callback
-                self.animationState = "idle"
-                print(string.format("Movement animation complete for %s", self.id or "N/A"))
-            end
+            self, targetX, targetY, self.grid, onAnimComplete -- Pass the callback
         )
         if animId then
              self.animationState = "moving"
              return true -- Animation started
         else
-             -- Animation failed to start (e.g., unit already animating)
-             -- Since logical move succeeded, update visual pos immediately as fallback
+             -- Animation failed to start, snap visual pos as fallback
              print(string.format("WARN: Move animation failed for %s, snapping visual pos.", self.id or "N/A"))
              self.visualX = targetX
              self.visualY = targetY

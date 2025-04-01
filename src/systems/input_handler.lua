@@ -65,22 +65,8 @@ function InputHandler:update(dt)
     self.mouse.x = mx
     self.mouse.y = my
     
-    -- *** ADD LOG before clearing ***
-    local pressedKeys = {}
-    for k, v in pairs(self.keysPressed) do if v then table.insert(pressedKeys, k) end end
-    if #pressedKeys > 0 then print("[InputHandler] Clearing keysPressed:", table.concat(pressedKeys, ", ")) end
-    local pressedBtns = {}
-    for k, v in pairs(self.mouse.buttonsPressed) do if v then table.insert(pressedBtns, k) end end
-    if #pressedBtns > 0 then print("[InputHandler] Clearing buttonsPressed:", table.concat(pressedBtns, ", ")) end
-    -- *** END LOG ***
+    self:clearPressedState()
 
-    -- *** REMOVE CLEARING LOGIC FROM HERE ***
-    -- self.keysPressed = {}
-    -- self.keysReleased = {}
-    -- self.mouse.buttonsPressed = {}
-    -- self.mouse.buttonsReleased = {}
-    -- self.touchesPressed = {}
-    -- self.touchesReleased = {}
 end
 
 -- *** ADD: New method to clear pressed states ***
@@ -237,10 +223,17 @@ end
 
 -- Mouse pressed callback
 function InputHandler:mousepressed(x, y, button, istouch, presses)
-    print("[InputHandler] mousepressed:", button, "at", x, y) -- *** ADD LOG ***
-    self.mouse.buttons[button] = true
-    self.mouse.buttonsPressed[button] = true
-    print("  -> buttonsPressed["..button.."] set to", self.mouse.buttonsPressed[button]) -- *** ADD LOG ***
+    -- Only trigger on the first press if it's a multi-press event
+    if presses == 1 then
+        self.mouse.buttons[button] = true
+        self.mouse.buttonsPressed[button] = true
+        -- print("[InputHandler] mousepressed:", button, "at", x, y, " -> buttonsPressed set") -- Debug log
+    end
+    -- If you want every press in a double-click etc. to register as pressed:
+    -- self.mouse.buttons[button] = true
+    -- self.mouse.buttonsPressed[button] = true
+    -- print("[InputHandler] mousepressed:", button, "at", x, y, "presses:", presses, " -> buttonsPressed set") -- Debug log
+
 
     self:triggerCallbacks("mousepressed", x, y, button, istouch, presses)
 end

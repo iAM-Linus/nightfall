@@ -152,12 +152,15 @@ function love.update(dt)
     if game.uiManager and game.uiManager.update then
         game.uiManager:update(dt)
     end
+
+    gamestate.current():update(dt)
+
     -- Add other global system updates here if needed
 
     -- *** REMOVE InputHandler:update call ***
-    -- if game.inputHandler and game.inputHandler.update then
-    --     game.inputHandler:update(dt)
-    -- end
+    if game.inputHandler and game.inputHandler.update then
+         game.inputHandler:update(dt)
+    end
 end
 
 -- Draw the game
@@ -173,48 +176,40 @@ function love.draw()
     end
 end
 
--- Handle key presses (MODIFIED: Remove direct logic)
 function love.keypressed(key, scancode, isrepeat)
-    -- InputHandler and HUMP gamestate handle this now via registered callbacks
-    -- We don't need direct logic here anymore unless it's truly global and
-    -- shouldn't be handled by states/UI.
-    -- Example: A global quit key 'q' might stay here if not in InputHandler bindings.
-    -- if key == 'q' then love.event.quit() end
+    if gamestate.current().keypressed then
+        gamestate.current():keypressed(key, scancode, isrepeat)
+    end
 end
 
--- Handle mouse presses (MODIFIED: Remove direct logic)
+function love.keyreleased(key, scancode)
+     if gamestate.current().keyreleased then
+        gamestate.current():keyreleased(key, scancode)
+    end
+end
+
 function love.mousepressed(x, y, button, istouch, presses)
-    -- InputHandler and HUMP gamestate handle this now
+    if gamestate.current().mousepressed then
+        gamestate.current():mousepressed(x, y, button, istouch, presses)
+    end
 end
 
--- Handle mouse releases (MODIFIED: Remove direct logic)
 function love.mousereleased(x, y, button, istouch, presses)
-    -- InputHandler and HUMP gamestate handle this now
+     if gamestate.current().mousereleased then
+        gamestate.current():mousereleased(x, y, button, istouch, presses)
+    end
 end
 
--- Handle mouse movement (MODIFIED: Remove direct logic, UIManager handles hover)
 function love.mousemoved(x, y, dx, dy, istouch)
-     if game.uiManager and game.uiManager.mousemoved then
-         game.uiManager:mousemoved(x, y, dx, dy) -- Let UI manager handle hover effects
-     end
-    -- HUMP handles state-specific move if needed
+     if gamestate.current().mousemoved then
+        gamestate.current():mousemoved(x, y, dx, dy, istouch)
+    end
 end
 
--- Handle mouse wheel (MODIFIED: Remove direct logic)
 function love.wheelmoved(x, y)
-     -- Let UIManager handle it first if needed
-     if game.uiManager and game.uiManager.wheelmoved then
-         if game.uiManager:wheelmoved(x, y) then return end
-     end
-    -- HUMP handles state-specific wheel if needed
-end
-
--- Handle window resize (Keep UIManager call)
-function love.resize(w, h)
-   if game.uiManager and game.uiManager.resize then
-       game.uiManager:resize(w, h)
-   end
-    -- HUMP handles state-specific resize
+     if gamestate.current().wheelmoved then
+        gamestate.current():wheelmoved(x, y)
+    end
 end
 
 function love.resize(w, h)

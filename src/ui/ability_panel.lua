@@ -142,7 +142,10 @@ end
 
 -- Hide the panel (MODIFIED: Use tween)
 function AbilityPanel:hide()
-    print("AbilityPanel: Hiding")
+    -- *** ADD TRACEBACK LOG ***
+    print("AbilityPanel: Hiding. Traceback:")
+    print(debug.traceback())
+    -- *** END ADD ***
     self.targetAlpha = 0
     -- Optional: Add tweening for smooth disappearance
     timer.tween(0.2, self, {alpha = 0}, 'out-quad', function()

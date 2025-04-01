@@ -4,8 +4,8 @@
 local gamestate = require("lib.hump.gamestate")
 local timer = require("lib.hump.timer")
 local Camera = require("src.systems.camera")
-local Grid = require("src.systems.grid") -- Need Grid class
-local Unit = require("src.entities.unit") -- Need Unit class
+local Grid = require("src.systems.grid")                    -- Need Grid class
+local Unit = require("src.entities.unit")                   -- Need Unit class
 local ChessMovement = require("src.systems.chess_movement") -- Keep for combat movement
 -- Combat systems are initialized here
 local TurnManager = require("src.systems.turn_manager")
@@ -39,7 +39,7 @@ local Combat = {}
 -- Enter the combat state
 function Combat:enter(previous, game, playerUnitsList, enemyFormationData, gridLayoutData, returnToStateInstance)
     print("--- Combat:enter START ---")
-    self.game = game -- Store global game reference
+    self.game = game                         -- Store global game reference
     self.returnState = returnToStateInstance -- Store the specific Game state instance to return to
 
     -- Initialize combat-specific variables
@@ -72,9 +72,13 @@ function Combat:enter(previous, game, playerUnitsList, enemyFormationData, gridL
         local startY = math.floor(gridH / 2) - math.floor(#self.playerUnits / 2) + i
         unit.x = startX
         unit.y = startY
+        -- *** FIX: Set initial visual position ***
+        unit.visualX = unit.x
+        unit.visualY = unit.y
+        -- *** END FIX ***
         unit.grid = self.grid -- Ensure unit knows its grid
         if not self.grid:placeEntity(unit, unit.x, unit.y) then
-             print("    ERROR: Failed to place player unit " .. unit.id .. " on combat grid!")
+            print("    ERROR: Failed to place player unit " .. unit.id .. " on combat grid!")
         end
         print("    Placed " .. unit.unitType .. " at (" .. unit.x .. "," .. unit.y .. ")")
     end
@@ -83,25 +87,29 @@ function Combat:enter(previous, game, playerUnitsList, enemyFormationData, gridL
     print("  Creating enemy units from formation...")
     if enemyFormationData and enemyFormationData.units then
         for _, unitData in ipairs(enemyFormationData.units) do
-             -- Create Unit instance
-             -- TODO: Get stats based on unitData.type, unitData.level, game difficulty etc.
-             local enemy = Unit:new({
-                 unitType = unitData.unitType,
-                 faction = "enemy",
-                 level = unitData.level or 1,
-                 isBoss = unitData.isBoss,
-                 isUnique = unitData.isUnique,
-                 x = unitData.x,
-                 y = unitData.y,
-                 grid = self.grid, -- Assign grid reference
-                 game = self.game -- Assign game reference
-                 -- stats = generatedStats, -- Generate stats here
-             })
-             table.insert(self.enemyUnits, enemy)
-             if not self.grid:placeEntity(enemy, enemy.x, enemy.y) then
-                 print("    ERROR: Failed to place enemy unit " .. enemy.id .. " on combat grid!")
-             end
-             print("    Created enemy " .. enemy.unitType .. " at (" .. enemy.x .. "," .. enemy.y .. ")")
+            -- Create Unit instance
+            -- TODO: Get stats based on unitData.type, unitData.level, game difficulty etc.
+            local enemy = Unit:new({
+                unitType = unitData.unitType,
+                faction = "enemy",
+                level = unitData.level or 1,
+                isBoss = unitData.isBoss,
+                isUnique = unitData.isUnique,
+                x = unitData.x,
+                y = unitData.y,
+                grid = self.grid,  -- Assign grid reference
+                game = self.game   -- Assign game reference
+                -- stats = generatedStats, -- Generate stats here
+            })
+            -- *** FIX: Set initial visual position ***
+            enemy.visualX = enemy.x
+            enemy.visualY = enemy.y
+            -- *** END FIX ***
+            table.insert(self.enemyUnits, enemy)
+            if not self.grid:placeEntity(enemy, enemy.x, enemy.y) then
+                print("    ERROR: Failed to place enemy unit " .. enemy.id .. " on combat grid!")
+            end
+            print("    Created enemy " .. enemy.unitType .. " at (" .. enemy.x .. "," .. enemy.y .. ")")
         end
     else
         print("  WARNING: No enemy formation data provided. Creating default enemies.")
@@ -145,7 +153,7 @@ function Combat:enter(previous, game, playerUnitsList, enemyFormationData, gridL
     self:addToCombatLog("Combat started!")
     if self.turnManager then
         self.turnManager:calculateInitiativeOrder() -- Calculate order based on units in THIS combat
-        self.turnManager:startTurn() -- Start the first turn
+        self.turnManager:startTurn()                -- Start the first turn
     end
 
     -- Center camera on the grid
@@ -168,11 +176,11 @@ function Combat:leave()
     -- Clean up combat-specific resources if necessary
     -- Reset turn manager callbacks to avoid conflicts if needed
     if self.turnManager then
-         self.turnManager.onTurnStart = nil
-         self.turnManager.onTurnEnd = nil
-         self.turnManager.onPhaseChange = nil
-         self.turnManager.onActionPointsChanged = nil
-         self.turnManager:setGrid(nil) -- Remove grid reference
+        self.turnManager.onTurnStart = nil
+        self.turnManager.onTurnEnd = nil
+        self.turnManager.onPhaseChange = nil
+        self.turnManager.onActionPointsChanged = nil
+        self.turnManager:setGrid(nil)  -- Remove grid reference
     end
     -- Clear local references
     self.grid = nil
@@ -185,9 +193,8 @@ function Combat:leave()
     print("--- Combat:leave END ---")
 end
 
--- Update combat logic (MODIFIED: Add input handling LOGS)
+-- Update combat logic
 function Combat:update(dt)
-    -- ... (timer, turn manager, camera, unit updates, game over check) ...
     if self.turnManager and self.turnManager.gameOver then return end
     timer.update(dt)
     if self.turnManager then self.turnManager:update(dt) end
@@ -196,46 +203,56 @@ function Combat:update(dt)
     for _, unit in ipairs(self.enemyUnits) do unit:update(dt) end
     self:checkCombatEnd()
 
+    -- *** ADD LOGGING for state variables ***
+    local currentUnitId = self.selectedUnit and self.selectedUnit.id or "None"
+    -- print("Combat:update - START - Mode:", self.currentActionMode, "Selected Unit:", currentUnitId) -- Optional: Reduce noise if too much
+    -- *** END LOGGING ***
+
     -- Input Handling
     if self.game.inputHandler and self.turnManager and self.turnManager:isPlayerTurn() then
         local input = self.game.inputHandler
 
         -- Mouse Input Handling
-        local mouse1Pressed = input:wasMousePressed(1) -- Get state
+        local mouse1Pressed = input:wasMousePressed(1)                      -- Get state
         if mouse1Pressed then
             print("Combat:update - input:wasMousePressed(1) returned TRUE") -- *** ADD LOG ***
             local mx, my = input.mouse.x, input.mouse.y
             local uiClickResult = nil
             if self.game.uiManager and self.game.uiManager.mousepressed then
-                 uiClickResult = self.game.uiManager:mousepressed(mx, my, 1)
+                uiClickResult = self.game.uiManager:mousepressed(mx, my, 1)
             end
 
             if uiClickResult then
-                print("Combat:update - UI Handled Left Click. Result:", serpent and serpent.dump(uiClickResult) or tostring(uiClickResult))
+                print("Combat:update - UI Handled Left Click. Result:",
+                    serpent and serpent.dump(uiClickResult) or tostring(uiClickResult))
                 -- Process UI result
                 if type(uiClickResult) == "table" then
-                    if uiClickResult.type == "hud_action" then self:handleHudAction(uiClickResult.id)
-                    elseif uiClickResult.type == "ability_slot" then self:handleAbilitySlotClick(uiClickResult.index, uiClickResult.id, uiClickResult.canUse)
-                    elseif uiClickResult.type == "ability_panel_background" then if self.currentActionMode == "ability" then self:cancelAction() end end
+                    if uiClickResult.type == "hud_action" then
+                        self:handleHudAction(uiClickResult.id)
+                    elseif uiClickResult.type == "ability_slot" then
+                        self:handleAbilitySlotClick(uiClickResult.index, uiClickResult.id, uiClickResult.canUse)
+                    elseif uiClickResult.type == "ability_panel_background" then
+                        if self.currentActionMode == "ability" then self:cancelAction() end
+                    end
                 end
             else
                 print("Combat:update - Processing Left Grid Click")
                 self:handleGridClick(mx, my, 1)
             end
-        -- else -- Optional log for when not pressed
+            -- else -- Optional log for when not pressed
             -- print("Combat:update - input:wasMousePressed(1) returned FALSE")
         end
 
-        local mouse2Pressed = input:wasMousePressed(2) -- Get state
+        local mouse2Pressed = input:wasMousePressed(2)                      -- Get state
         if mouse2Pressed then
             print("Combat:update - input:wasMousePressed(2) returned TRUE") -- *** ADD LOG ***
             local mx, my = input.mouse.x, input.mouse.y
-            local uiConsumed = false -- Check if UI consumes right click (optional)
+            local uiConsumed = false                                        -- Check if UI consumes right click (optional)
             if not uiConsumed then
-                 print("Combat:update - Processing Right Grid Click (Cancel)")
-                 self:handleGridClick(mx, my, 2)
+                print("Combat:update - Processing Right Grid Click (Cancel)")
+                self:handleGridClick(mx, my, 2)
             end
-        -- else -- Optional log
+            -- else -- Optional log
             -- print("Combat:update - input:wasMousePressed(2) returned FALSE")
         end
 
@@ -246,15 +263,20 @@ function Combat:update(dt)
         local keyUpPressed = input:wasPressed("up") or input:wasPressed("w")
         local keyDownPressed = input:wasPressed("down") or input:wasPressed("s")
 
-        if keyLeftPressed then dx = -1
-        elseif keyRightPressed then dx = 1
-        elseif keyUpPressed then dy = -1
-        elseif keyDownPressed then dy = 1 end
+        if keyLeftPressed then
+            dx = -1
+        elseif keyRightPressed then
+            dx = 1
+        elseif keyUpPressed then
+            dy = -1
+        elseif keyDownPressed then
+            dy = 1
+        end
 
         if dx ~= 0 or dy ~= 0 then
             print("Combat:update - Keyboard Move detected via wasPressed. dx,dy:", dx, dy) -- *** ADD LOG ***
             self:handleKeyboardMove(dx, dy)
-        -- else -- Optional log
+            -- else -- Optional log
             -- print("Combat:update - No movement key wasPressed.")
         end
 
@@ -262,36 +284,42 @@ function Combat:update(dt)
         if keyConfirmPressed then
             print("Combat:update - Keyboard Confirm detected via wasPressed") -- *** ADD LOG ***
             self:handleKeyboardConfirm()
-        -- else -- Optional log
+            -- else -- Optional log
             -- print("Combat:update - No confirm key wasPressed.")
         end
 
         local keyEndTurnPressed = input:wasPressed("e")
         if keyEndTurnPressed then
-             print("Combat:update - Keyboard End Turn detected via wasPressed") -- *** ADD LOG ***
-             if self.turnManager then self.turnManager:endTurn() end
+            print("Combat:update - Keyboard End Turn detected via wasPressed")  -- *** ADD LOG ***
+            if self.turnManager then self.turnManager:endTurn() end
         end
 
         local keyCancelPressed = input:wasPressed("escape")
         if keyCancelPressed then
-             print("Combat:update - Keyboard Cancel detected via wasPressed") -- *** ADD LOG ***
-             if self.currentActionMode then self:cancelAction() end
+            print("Combat:update - Keyboard Cancel detected via wasPressed")  -- *** ADD LOG ***
+            if self.currentActionMode then self:cancelAction() end
         end
 
         -- Ability Hotkeys
         for i = 1, 9 do
-             local keyNumPressed = input:wasPressed(tostring(i))
-             if keyNumPressed then
-                  print("Combat:update - Keyboard Ability Hotkey detected via wasPressed:", i) -- *** ADD LOG ***
-                  self:handleAbilityHotkey(i)
-                  break
-             end
+            local keyNumPressed = input:wasPressed(tostring(i))
+            if keyNumPressed then
+                print("Combat:update - Keyboard Ability Hotkey detected via wasPressed:", i)   -- *** ADD LOG ***
+                self:handleAbilityHotkey(i)
+                break
+            end
         end
 
+        -- *** ADD LOGGING for state variables at END ***
+        currentUnitId = self.selectedUnit and self.selectedUnit.id or "None"
+        -- print("Combat:update - END - Mode:", self.currentActionMode, "Selected Unit:", currentUnitId) -- Optional: Reduce noise if too much
+        -- *** END LOGGING ***
+
+
+        -- Clear InputHandler pressed state at the END
         if self.game.inputHandler and self.game.inputHandler.clearPressedState then
             self.game.inputHandler:clearPressedState()
         end
-    
     end
 end
 
@@ -304,7 +332,7 @@ function Combat:draw()
     -- Draw grid, units, highlights (using self. variables)
     if self.grid then self:drawGrid() end
     self:drawUnits()
-    
+
     -- *** FIX: Draw highlights based on action mode ***
     if self.currentActionMode == "move" then
         self:drawMovementHighlights()
@@ -351,12 +379,15 @@ function Combat:drawGrid()
             local screenX, screenY = self.grid:gridToScreen(x, y)
 
             -- Draw tile based on type
-            local tileColor = { floor = {0.5, 0.5, 0.5}, wall = {0.3, 0.3, 0.3}, }
+            local tileColor = { floor = { 0.5, 0.5, 0.5 }, wall = { 0.3, 0.3, 0.3 }, }
             if tile.type == "floor" then
-                if (x + y) % 2 == 0 then tileColor.floor = {0.6, 0.6, 0.6}
-                else tileColor.floor = {0.4, 0.4, 0.4} end
+                if (x + y) % 2 == 0 then
+                    tileColor.floor = { 0.6, 0.6, 0.6 }
+                else
+                    tileColor.floor = { 0.4, 0.4, 0.4 }
+                end
             end
-            local color = tileColor[tile.type] or {0.5, 0.5, 0.5}
+            local color = tileColor[tile.type] or { 0.5, 0.5, 0.5 }
 
             -- Apply fog effect if needed
             -- if self.grid.fogOfWar and not tile.visible and tile.explored then
@@ -380,9 +411,9 @@ function Combat:drawUnits()
         -- Add visibility check if fog of war is used in combat
         -- local tile = self.grid:getTile(unit.x, unit.y)
         -- if tile and (tile.visible or not self.grid.fogOfWar) then
-            unit:draw()
-            -- self:drawHealthBar(unit) -- Let Unit draw its own bar
-            -- self:drawStatusEffects(unit) -- Let Unit draw its own effects
+        unit:draw()
+        -- self:drawHealthBar(unit) -- Let Unit draw its own bar
+        -- self:drawStatusEffects(unit) -- Let Unit draw its own effects
         -- end
     end
 
@@ -391,9 +422,9 @@ function Combat:drawUnits()
         -- Add visibility check if needed
         -- local tile = self.grid:getTile(unit.x, unit.y)
         -- if tile and (tile.visible or not self.grid.fogOfWar) then
-            unit:draw()
-            -- self:drawHealthBar(unit)
-            -- self:drawStatusEffects(unit)
+        unit:draw()
+        -- self:drawHealthBar(unit)
+        -- self:drawStatusEffects(unit)
         -- end
     end
 end
@@ -465,8 +496,11 @@ function Combat:drawCombatLog(width, height)
         local entry = self.combatLog[i]
         local displayIndex = i - startIndex + 1
 
-        if displayIndex % 2 == 0 then love.graphics.setColor(0.8, 0.8, 0.8, 0.8)
-        else love.graphics.setColor(1, 1, 1, 0.8) end
+        if displayIndex % 2 == 0 then
+            love.graphics.setColor(0.8, 0.8, 0.8, 0.8)
+        else
+            love.graphics.setColor(1, 1, 1, 0.8)
+        end
 
         love.graphics.print(entry, logX + 10, lineY)
         lineY = lineY + 15
@@ -509,25 +543,30 @@ end
 function Combat:createDefaultEnemyUnits()
     self.enemyUnits = {}
     local Unit = require("src.entities.unit")
-    local enemyData = { {unitType="pawn", x=6, y=3}, {unitType="pawn", x=6, y=7}, {unitType="knight", x=7, y=5} }
+    local enemyData = { { unitType = "pawn", x = 6, y = 3 }, { unitType = "pawn", x = 6, y = 7 }, { unitType = "knight", x = 7, y = 5 } }
 
     for _, data in ipairs(enemyData) do
-         local enemy = Unit:new({
-            unitType = data.unitType, faction = "enemy",
-            x = data.x, y = data.y,
-            grid = self.grid, game = self.game
-         })
-         if self.grid:placeEntity(enemy, enemy.x, enemy.y) then
-             table.insert(self.enemyUnits, enemy)
-         else
-             print("Failed to place default enemy: " .. enemy.unitType)
-         end
+        local enemy = Unit:new({
+            unitType = data.unitType,
+            faction = "enemy",
+            x = data.x,
+            y = data.y,
+            grid = self.grid,
+            game = self.game
+        })
+        if self.grid:placeEntity(enemy, enemy.x, enemy.y) then
+            table.insert(self.enemyUnits, enemy)
+        else
+            print("Failed to place default enemy: " .. enemy.unitType)
+        end
     end
 end
 
 -- Handle turn start event (Use self. variables)
 function Combat:handleTurnStart(unit)
-    if not unit then print("ERROR: handleTurnStart called with nil unit"); return end
+    if not unit then
+        print("ERROR: handleTurnStart called with nil unit"); return
+    end
 
     -- Reset unit action states (now handled by unit:resetActionState)
     -- unit.hasMoved = false
@@ -557,7 +596,7 @@ function Combat:handleTurnStart(unit)
             self.game.uiManager:setSelectedUnit(unit)
             self.game.uiManager.hud.abilityPanel:setUnit(unit) -- Update ability panel
         else
-            self.game.uiManager:setSelectedUnit(nil) -- Deselect player unit
+            self.game.uiManager:setSelectedUnit(nil)           -- Deselect player unit
             self.game.uiManager.hud.abilityPanel:setUnit(nil)
         end
         -- AP update handled by onActionPointsChanged callback
@@ -566,7 +605,9 @@ end
 
 -- Handle turn end event (Use self. variables)
 function Combat:handleTurnEnd(unit)
-    if not unit then print("ERROR: handleTurnEnd called with nil unit"); return end
+    if not unit then
+        print("ERROR: handleTurnEnd called with nil unit"); return
+    end
 
     -- Apply status effects that trigger at turn end (handled by unit:update)
     -- self.statusEffectsSystem:triggerEffects(unit, "turnEnd")
@@ -620,8 +661,10 @@ function Combat:selectUnit(unit)
         return -- Don't proceed further if re-selecting same unit
     end
 
+    -- *** ADD LOG ***
+    print("Combat:selectUnit - CALLED for unit:", unit.id, "Current Mode was:", self.currentActionMode)
+    -- *** END LOG ***
 
-    print("Combat: Selecting unit " .. unit.unitType .. ", Current Mode: " .. tostring(self.currentActionMode))
     self.selectedUnit = unit
     self.targetUnit = nil
     -- *** FIX: Only reset mode if NOT selecting via ability panel interaction ***
@@ -663,7 +706,7 @@ function Combat:getValidAttacks(unit)
     for _, enemy in ipairs(self.enemyUnits) do
         -- Check range using canAttack helper
         if self:canAttack(unit, enemy) then
-             table.insert(attacks, {x = enemy.x, y = enemy.y, unit = enemy})
+            table.insert(attacks, { x = enemy.x, y = enemy.y, unit = enemy })
         end
         -- Old range check:
         -- local distance = math.abs(unit.x - enemy.x) + math.abs(unit.y - enemy.y)
@@ -708,9 +751,9 @@ function Combat:moveSelectedUnit(x, y)
     if moveSuccess then
         self.selectedUnit.hasMoved = true
         self.turnManager:useActionPoints(moveCost) -- Deduct AP via TurnManager
-        self.currentActionMode = nil -- *** FIX: Reset mode after action ***
-        self.validMoves = {} -- Clear highlights
-        self.validAttacks = {} -- Clear highlights
+        self.currentActionMode = nil               -- *** FIX: Reset mode after action ***
+        self.validMoves = {}                       -- Clear highlights
+        self.validAttacks = {}                     -- Clear highlights
 
         -- Update visibility if needed
         -- self.grid:updateVisibility()
@@ -752,7 +795,8 @@ function Combat:attackUnit(attacker, defender)
 
     if success then
         -- Recalculate valid moves/attacks for the attacker
-        self.validMoves = ChessMovement.getValidMoves(attacker.movementPattern, attacker.x, attacker.y, self.grid, attacker, attacker.stats.moveRange)
+        self.validMoves = ChessMovement.getValidMoves(attacker.movementPattern, attacker.x, attacker.y, self.grid,
+            attacker, attacker.stats.moveRange)
         self.validAttacks = self:getValidAttacks(attacker)
         -- Update target info in HUD
         if self.game.uiManager then self.game.uiManager:setTargetUnit(defender) end
@@ -769,8 +813,11 @@ function Combat:handleUnitDefeat(unit)
 
     -- Remove from appropriate list
     local listToRemoveFrom = nil
-    if unit.faction == "player" then listToRemoveFrom = self.playerUnits
-    else listToRemoveFrom = self.enemyUnits end
+    if unit.faction == "player" then
+        listToRemoveFrom = self.playerUnits
+    else
+        listToRemoveFrom = self.enemyUnits
+    end
 
     if listToRemoveFrom then
         for i = #listToRemoveFrom, 1, -1 do -- Iterate backwards when removing
@@ -869,52 +916,76 @@ function Combat:handleHudAction(actionId)
     if actionId == "end" then
         if self.turnManager then self.turnManager:endTurn() end
     else
+        -- Set mode first
         self.currentActionMode = actionId
         self:addToCombatLog("Mode: " .. actionId)
         self.validMoves = {}; self.validAttacks = {}
-        if self.game.uiManager then self.game.uiManager:hideAbilityPanel() end
-        if self.game.uiManager.hud.abilityPanel then self.game.uiManager.hud.abilityPanel:setSelectedSlot(nil) end -- Deselect ability slot
+        -- Deselect ability slot in panel when changing modes
+        if self.game.uiManager and self.game.uiManager.hud.abilityPanel then
+             self.game.uiManager.hud.abilityPanel:setSelectedSlot(nil)
+        end
 
+        -- Handle panel visibility and highlight calculation based on action
         if actionId == "move" then
-            if not self.selectedUnit.hasMoved then self.validMoves = ChessMovement.getValidMoves(self.selectedUnit.movementPattern, self.selectedUnit.x, self.selectedUnit.y, self.grid, self.selectedUnit, self.selectedUnit.stats.moveRange)
-            else self:addToCombatLog("Unit has already moved."); self.currentActionMode = nil end
+            print("Combat:handleHudAction - Hiding panel for MOVE")
+            if self.game.uiManager then self.game.uiManager:hideAbilityPanel() end -- Hide for move
+            if not self.selectedUnit.hasMoved then
+                self.validMoves = ChessMovement.getValidMoves(self.selectedUnit.movementPattern, self.selectedUnit.x, self.selectedUnit.y, self.grid, self.selectedUnit, self.selectedUnit.stats.moveRange)
+            else
+                self:addToCombatLog("Unit has already moved.")
+                self.currentActionMode = nil -- Cancel mode if invalid
+            end
         elseif actionId == "attack" then
-            if not self.selectedUnit.hasAttacked then self.validAttacks = self:getValidAttacks(self.selectedUnit)
-            else self:addToCombatLog("Unit has already attacked."); self.currentActionMode = nil end
+            print("Combat:handleHudAction - Hiding panel for ATTACK")
+            if self.game.uiManager then self.game.uiManager:hideAbilityPanel() end -- Hide for attack
+            if not self.selectedUnit.hasAttacked then
+                self.validAttacks = self:getValidAttacks(self.selectedUnit)
+            else
+                 self:addToCombatLog("Unit has already attacked.")
+                 self.currentActionMode = nil -- Cancel mode if invalid
+            end
         elseif actionId == "ability" then
-            if not self.selectedUnit.hasUsedAbility then if self.game.uiManager then self.game.uiManager:showAbilityPanel() end
-            else self:addToCombatLog("Unit has already used an ability."); self.currentActionMode = nil end
+            if not self.selectedUnit.hasUsedAbility then
+                 print("Combat:handleHudAction - Showing panel for ABILITY")
+                 if self.game.uiManager then self.game.uiManager:showAbilityPanel() end
+                 -- TODO: Highlight ability range later if needed
+            else
+                 self:addToCombatLog("Unit has already used an ability.")
+                 self.currentActionMode = nil -- Cancel mode if invalid
+                 print("Combat:handleHudAction - Hiding panel (ability already used)")
+                 if self.game.uiManager then self.game.uiManager:hideAbilityPanel() end -- Hide if invalid
+            end
         end
     end
 end
 
 -- *** ADD: New function to handle ability slot clicks from HUD ***
 function Combat:handleAbilitySlotClick(slotIndex, abilityId, canUse)
-     if not self.selectedUnit then return end -- Need selected unit
-     if self.currentActionMode ~= "ability" then
-         print("WARN: Ability slot clicked but not in ability mode.")
-         -- Optionally switch to ability mode here?
-         -- self.currentActionMode = "ability"
-         -- if self.game.uiManager then self.game.uiManager:showAbilityPanel() end
-         return
-     end
+    if not self.selectedUnit then return end  -- Need selected unit
+    if self.currentActionMode ~= "ability" then
+        print("WARN: Ability slot clicked but not in ability mode.")
+        -- Optionally switch to ability mode here?
+        -- self.currentActionMode = "ability"
+        -- if self.game.uiManager then self.game.uiManager:showAbilityPanel() end
+        return
+    end
 
-     local abilityPanel = self.game.uiManager and self.game.uiManager.hud.abilityPanel
-     if not abilityPanel then return end
+    local abilityPanel = self.game.uiManager and self.game.uiManager.hud.abilityPanel
+    if not abilityPanel then return end
 
-     if abilityPanel.selectedSlot == slotIndex then
-         -- Clicked the already selected slot -> Deselect
-         abilityPanel:setSelectedSlot(nil)
-         self:addToCombatLog("Ability deselected.")
-         -- Keep ability mode active, but no specific ability selected now
-     elseif canUse then
-         -- Clicked a new, usable slot -> Select
-         abilityPanel:setSelectedSlot(slotIndex)
-         self:addToCombatLog("Selected Ability: " .. (abilityPanel:getSelectedAbility().name or abilityId))
-     else
-         -- Clicked an unusable slot
-         self:addToCombatLog("Cannot use this ability now (cooldown/cost).")
-     end
+    if abilityPanel.selectedSlot == slotIndex then
+        -- Clicked the already selected slot -> Deselect
+        abilityPanel:setSelectedSlot(nil)
+        self:addToCombatLog("Ability deselected.")
+        -- Keep ability mode active, but no specific ability selected now
+    elseif canUse then
+        -- Clicked a new, usable slot -> Select
+        abilityPanel:setSelectedSlot(slotIndex)
+        self:addToCombatLog("Selected Ability: " .. (abilityPanel:getSelectedAbility().name or abilityId))
+    else
+        -- Clicked an unusable slot
+        self:addToCombatLog("Cannot use this ability now (cooldown/cost).")
+    end
 end
 
 -- *** ADD: New function to handle grid clicks ***
@@ -937,30 +1008,68 @@ function Combat:handleGridClick(screenX, screenY, button)
 
         -- If an action mode is active
         if self.currentActionMode then
-            if not self.selectedUnit then self.currentActionMode = nil; return end -- Safety check
+            if not self.selectedUnit then
+                self.currentActionMode = nil; return
+            end                                                                    -- Safety check
 
             if self.currentActionMode == "move" then
-                local isValidMove = false; for _, move in ipairs(self.validMoves) do if move.x == gridX and move.y == gridY and not move.isAttack then isValidMove = true; break end end
+                local isValidMove = false; for _, move in ipairs(self.validMoves) do if move.x == gridX and move.y == gridY and not move.isAttack then
+                        isValidMove = true; break
+                    end end
                 if isValidMove then self:moveSelectedUnit(gridX, gridY) else self:addToCombatLog("Invalid move target.") end
             elseif self.currentActionMode == "attack" then
-                local isValidAttack = false; local targetEntity = nil; for _, attack in ipairs(self.validAttacks) do if attack.x == gridX and attack.y == gridY then isValidAttack = true; targetEntity = attack.unit; break end end
-                if isValidAttack and targetEntity then self:attackUnit(self.selectedUnit, targetEntity) else self:addToCombatLog("Invalid attack target.") end
+                local isValidAttack = false; local targetEntity = nil; for _, attack in ipairs(self.validAttacks) do if attack.x == gridX and attack.y == gridY then
+                        isValidAttack = true; targetEntity = attack.unit; break
+                    end end
+                if isValidAttack and targetEntity then self:attackUnit(self.selectedUnit, targetEntity) else self
+                        :addToCombatLog("Invalid attack target.") end
             elseif self.currentActionMode == "ability" then
-                local selectedAbilityData = self.game.uiManager and self.game.uiManager.hud.abilityPanel:getSelectedAbility()
+                local selectedAbilityData = self.game.uiManager and
+                self.game.uiManager.hud.abilityPanel:getSelectedAbility()
                 if selectedAbilityData then
-                    -- Use ability on clicked target/position
-                    self:useAbility(self.selectedUnit, selectedAbilityData.id, clickedEntity, gridX, gridY)
+                    -- Get the ability definition first
+                    local ability = self.game.specialAbilitiesSystem:getAbility(selectedAbilityData.id)
+                    if not ability then
+                        self:addToCombatLog("Unknown ability: " .. selectedAbilityData.id)
+                        return
+                    end
+                    
+                    -- Check range BEFORE attempting to use ability
+                    if ability.attackRange > 0 then
+                        local distance = math.abs(self.selectedUnit.x - gridX) + math.abs(self.selectedUnit.y - gridY)
+                        if distance > ability.attackRange then
+                            self:addToCombatLog(ability.name .. ": Target out of range (" .. distance .. "/" .. ability.attackRange .. ")")
+                            return
+                        end
+                    end
+                    
+                    -- Now call useAbility on the UNIT
+                    local success = self.selectedUnit:useAbility(selectedAbilityData.id, clickedEntity, gridX, gridY)
+                    
+                    if success then
+                        -- Reset mode etc. after successful use
+                        self.currentActionMode = nil
+                        self.validMoves = {}
+                        self.validAttacks = {}
+                        -- Optionally hide panel again?
+                        -- if self.game.uiManager then self.game.uiManager:hideAbilityPanel() end
+                    end
+                    -- No need for addToCombatLog here, Unit:useAbility or system should handle logs
                 else
                     self:addToCombatLog("No ability selected. Click an ability icon first.")
                 end
             end
-        else -- No action mode active - handle unit selection
+        else                                                                   -- No action mode active - handle unit selection
             if clickedEntity and clickedEntity.faction == "player" then
-                if clickedEntity == self.selectedUnit then self:cancelAction() -- Deselect if clicking self
-                else self:selectUnit(clickedEntity) end
+                if clickedEntity == self.selectedUnit then
+                    self:cancelAction()                                        -- Deselect if clicking self
+                else
+                    self:selectUnit(clickedEntity)
+                end
             elseif clickedEntity and clickedEntity.faction == "enemy" then
-                self.targetUnit = clickedEntity; if self.game.uiManager then self.game.uiManager:setTargetUnit(clickedEntity) end
-            else -- Clicked empty space
+                self.targetUnit = clickedEntity; if self.game.uiManager then self.game.uiManager:setTargetUnit(
+                    clickedEntity) end
+            else                    -- Clicked empty space
                 self:cancelAction() -- Deselect
             end
         end
@@ -977,55 +1086,58 @@ function Combat:handleKeyboardMove(dx, dy)
     -- If in move mode, try to move
     if self.currentActionMode == "move" then
         self:moveSelectedUnit(targetX, targetY)
-    -- If in attack mode, try to attack
+        -- If in attack mode, try to attack
     elseif self.currentActionMode == "attack" then
-         local targetEntity = self.grid:getEntityAt(targetX, targetY)
-         if targetEntity and targetEntity.faction ~= self.selectedUnit.faction then
-             self:attackUnit(self.selectedUnit, targetEntity)
-         else
-             self:addToCombatLog("No enemy target in that direction.")
-         end
-    -- If in ability mode with a selected ability, try to use it
+        local targetEntity = self.grid:getEntityAt(targetX, targetY)
+        if targetEntity and targetEntity.faction ~= self.selectedUnit.faction then
+            self:attackUnit(self.selectedUnit, targetEntity)
+        else
+            self:addToCombatLog("No enemy target in that direction.")
+        end
+        -- If in ability mode with a selected ability, try to use it
     elseif self.currentActionMode == "ability" then
-         local selectedAbilityData = self.game.uiManager and self.game.uiManager.hud.abilityPanel:getSelectedAbility()
-         if selectedAbilityData then
-             local targetEntity = self.grid:getEntityAt(targetX, targetY)
-             self:useAbility(self.selectedUnit, selectedAbilityData.id, targetEntity, targetX, targetY)
-         else
-             self:addToCombatLog("No ability selected.")
-         end
-    -- If no mode active, maybe just select the tile? (Optional)
-    -- else
-    --    print("Keyboard move with no action mode active.")
+        local selectedAbilityData = self.game.uiManager and self.game.uiManager.hud.abilityPanel:getSelectedAbility()
+        if selectedAbilityData then
+            local targetEntity = self.grid:getEntityAt(targetX, targetY)
+            self:useAbility(self.selectedUnit, selectedAbilityData.id, targetEntity, targetX, targetY)
+        else
+            self:addToCombatLog("No ability selected.")
+        end
+        -- If no mode active, maybe just select the tile? (Optional)
+        -- else
+        --    print("Keyboard move with no action mode active.")
     end
 end
 
 -- *** ADD: New function to handle keyboard confirm ***
 function Combat:handleKeyboardConfirm()
-     if not self.selectedUnit then return end
-     -- Example: If targeting an enemy, confirm attack?
-     if self.targetUnit and self.currentActionMode ~= "move" then -- Don't attack if explicitly moving
-         if self:canAttack(self.selectedUnit, self.targetUnit) then
-             self:attackUnit(self.selectedUnit, self.targetUnit)
-         else
-             self:addToCombatLog("Cannot attack target.")
-         end
-     -- Example: If ability selected, use on self?
-     elseif self.currentActionMode == "ability" then
-         local selectedAbilityData = self.game.uiManager and self.game.uiManager.hud.abilityPanel:getSelectedAbility()
-         if selectedAbilityData then
-             local ability = self.specialAbilitiesSystem:getAbility(selectedAbilityData.id)
-             if ability and ability.targetType == "self" then
-                 self:useAbility(self.selectedUnit, selectedAbilityData.id, self.selectedUnit, self.selectedUnit.x, self.selectedUnit.y)
-             else
-                 self:addToCombatLog("Select a target for the ability.")
-             end
-         end
-     else
-         -- Default confirm action? Maybe end turn if no other action?
-         -- if self.turnManager then self.turnManager:endTurn() end
-         print("Confirm pressed - No default action defined.")
-     end
+    if not self.selectedUnit then return end
+    -- Example: If targeting an enemy, confirm attack?
+    if self.targetUnit and self.currentActionMode ~= "move" then  -- Don't attack if explicitly moving
+        if self:canAttack(self.selectedUnit, self.targetUnit) then
+            self:attackUnit(self.selectedUnit, self.targetUnit)
+        else
+            self:addToCombatLog("Cannot attack target.")
+        end
+        -- Example: If ability selected, use on self?
+    elseif self.currentActionMode == "ability" then
+        local selectedAbilityData = self.game.uiManager and self.game.uiManager.hud.abilityPanel:getSelectedAbility()
+        if selectedAbilityData then
+            local ability = self.specialAbilitiesSystem:getAbility(selectedAbilityData.id)
+            if ability and ability.targetType == "self" then
+                -- *** FIX: Call useAbility on the UNIT ***
+                local success = self.selectedUnit:useAbility(selectedAbilityData.id, self.selectedUnit, self.selectedUnit.x, self.selectedUnit.y)
+                -- *** END FIX ***
+                if success then self.currentActionMode = nil end -- Reset mode
+            else
+                self:addToCombatLog("Select a target for the ability.")
+            end
+        end
+    else
+        -- Default confirm action? Maybe end turn if no other action?
+        -- if self.turnManager then self.turnManager:endTurn() end
+        print("Confirm pressed - No default action defined.")
+    end
 end
 
 -- *** ADD: New function to handle ability hotkeys ***
@@ -1042,11 +1154,14 @@ function Combat:handleAbilityHotkey(index)
         -- Requires target selection first for most abilities
         self:addToCombatLog("Select a target for " .. slotData.name)
         -- Or if self-targeting, use it:
-        -- local ability = self.specialAbilitiesSystem:getAbility(slotData.id)
-        -- if ability and ability.targetType == "self" then
-        --    self:useAbility(self.selectedUnit, slotData.id, self.selectedUnit, self.selectedUnit.x, self.selectedUnit.y)
-        -- end
-    -- Otherwise, select the ability and enter ability mode
+        local ability = self.specialAbilitiesSystem:getAbility(slotData.id)
+        if ability and ability.targetType == "self" then
+            -- *** END FIX ***
+            if success then self.currentActionMode = nil end -- Reset mode
+        else
+            self:addToCombatLog("Select a target for " .. slotData.name)
+        end
+        -- Otherwise, select the ability and enter ability mode
     elseif slotData.canUse then
         self.currentActionMode = "ability"
         abilityPanel:setSelectedSlot(index)
@@ -1057,22 +1172,25 @@ function Combat:handleAbilityHotkey(index)
     end
 end
 
--- *** ADD: New function to cancel current action ***
+-- Modify cancelAction to log when called
 function Combat:cancelAction()
-    print("Combat:cancelAction called")
+    -- *** ADD LOG ***
+    print("Combat:cancelAction - CALLED. Current Mode was:", self.currentActionMode)
+    -- *** END LOG ***
     self.currentActionMode = nil
     self.selectedUnit = nil
     self.targetUnit = nil
     self.validMoves = {}
     self.validAttacks = {}
     if self.game.uiManager then
-         self.game.uiManager:setSelectedUnit(nil)
-         self.game.uiManager:setTargetUnit(nil)
-         self.game.uiManager:hideAbilityPanel()
-         if self.game.uiManager.hud.abilityPanel then
-             self.game.uiManager.hud.abilityPanel:setSelectedSlot(nil)
-             self.game.uiManager.hud.abilityPanel:setUnit(nil)
-         end
+        self.game.uiManager:setSelectedUnit(nil)
+        self.game.uiManager:setTargetUnit(nil)
+        print("Combat:cancelAction - Hiding Ability Panel")  -- Keep this log
+        self.game.uiManager:hideAbilityPanel()               -- This call will now print a traceback
+        if self.game.uiManager.hud.abilityPanel then
+            self.game.uiManager.hud.abilityPanel:setSelectedSlot(nil)
+            self.game.uiManager.hud.abilityPanel:setUnit(nil)
+        end
     end
     self:addToCombatLog("Action cancelled")
 end

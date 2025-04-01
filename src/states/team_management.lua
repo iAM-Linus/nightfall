@@ -37,6 +37,7 @@ local showItemDetail = false
 local detailUnit = nil
 local detailItem = nil
 local equipmentSlotSelected = nil
+local selectedStoreUnit = nil
 
 -- Color definitions
 local COLORS = {
@@ -470,7 +471,7 @@ function TeamManagement:drawStoreContent(width, height)
     end
 end
 
--- Draw units store
+-- Updated drawUnitsStore function to handle both hover and selection
 function TeamManagement:drawUnitsStore(x, y, width, height)
     -- Draw title
     love.graphics.setFont(menuFont)
@@ -496,13 +497,18 @@ function TeamManagement:drawUnitsStore(x, y, width, height)
             love.graphics.setColor(COLORS.panel)
             love.graphics.rectangle("fill", unitX, unitY, unitSize, unitSize)
             
-            -- Unit border
+            -- Unit border (highlight if hovered or selected)
             if hoveredUnit == i then
                 love.graphics.setColor(COLORS.gold)
+                love.graphics.rectangle("line", unitX, unitY, unitSize, unitSize, 2)
+            elseif selectedStoreUnit == i then
+                -- Use a different color for selected unit to distinguish from hover
+                love.graphics.setColor(COLORS.title)
+                love.graphics.rectangle("line", unitX, unitY, unitSize, unitSize, 2)
             else
                 love.graphics.setColor(COLORS.border)
+                love.graphics.rectangle("line", unitX, unitY, unitSize, unitSize)
             end
-            love.graphics.rectangle("line", unitX, unitY, unitSize, unitSize)
             
             -- Unit icon (placeholder)
             love.graphics.setColor(0.7, 0.7, 0.8)
@@ -525,6 +531,102 @@ function TeamManagement:drawUnitsStore(x, y, width, height)
             end
         end
     end
+end
+
+-- Updated drawUnitHoverInfo function to show info for selectedStoreUnit instead of hoveredUnit
+function TeamManagement:drawUnitHoverInfo(width, height, unit)
+    local infoWidth = 274
+    local infoHeight = height - 160
+    local infoX = width - infoWidth - 30
+    local infoY = 140
+    
+    -- Draw panel background
+    love.graphics.setColor(COLORS.panel)
+    love.graphics.rectangle("fill", infoX, infoY, infoWidth, infoHeight)
+    love.graphics.setColor(COLORS.border)
+    love.graphics.rectangle("line", infoX, infoY, infoWidth, infoHeight)
+    
+    -- Draw panel title
+    love.graphics.setFont(menuFont)
+    love.graphics.setColor(COLORS.title)
+    love.graphics.printf("UNIT DETAILS", infoX, infoY + 10, infoWidth, "center")
+    
+    -- Draw unit name and type
+    love.graphics.setFont(menuFont)
+    love.graphics.setColor(COLORS.text)
+    love.graphics.print(unit.name, infoX + 20, infoY + 50)
+    
+    love.graphics.setFont(smallFont)
+    love.graphics.setColor(COLORS.textDim)
+    love.graphics.print("Type: " .. unit.type:upper(), infoX + 20, infoY + 80)
+    love.graphics.print("Level: 1", infoX + 20, infoY + 100)
+    
+    -- Draw HP bar
+    local barWidth = infoWidth - 40
+    love.graphics.setColor(COLORS.panel)
+    love.graphics.rectangle("fill", infoX + 20, infoY + 130, barWidth, 20)
+    love.graphics.setColor(COLORS.health)
+    love.graphics.rectangle("fill", infoX + 20, infoY + 130, barWidth, 20)
+    
+    love.graphics.setFont(smallFont)
+    love.graphics.setColor(COLORS.text)
+    love.graphics.print("HP: " .. unit.stats.health .. "/" .. unit.stats.maxHealth, infoX + 25, infoY + 132)
+    
+    -- Draw MP bar
+    love.graphics.setColor(COLORS.panel)
+    love.graphics.rectangle("fill", infoX + 20, infoY + 160, barWidth, 20)
+    love.graphics.setColor(COLORS.mana)
+    love.graphics.rectangle("fill", infoX + 20, infoY + 160, barWidth, 20)
+    
+    love.graphics.setFont(smallFont)
+    love.graphics.setColor(COLORS.text)
+    love.graphics.print("MP: " .. unit.stats.mana .. "/" .. unit.stats.maxMana, infoX + 25, infoY + 162)
+    
+    -- Draw stats
+    love.graphics.setFont(smallFont)
+    
+    love.graphics.setColor(COLORS.attack)
+    love.graphics.print("ATK: " .. unit.stats.attack, infoX + 20, infoY + 190)
+    
+    love.graphics.setColor(COLORS.defense)
+    love.graphics.print("DEF: " .. unit.stats.defense, infoX + 20, infoY + 210)
+    
+    love.graphics.setColor(COLORS.speed)
+    love.graphics.print("SPD: " .. unit.stats.speed, infoX + 20, infoY + 230)
+    
+    -- Draw abilities
+    love.graphics.setFont(smallFont)
+    love.graphics.setColor(COLORS.title)
+    love.graphics.print("ABILITIES:", infoX + 20, infoY + 260)
+    
+    love.graphics.setColor(COLORS.textDim)
+    for i, ability in ipairs(unit.abilities) do
+        love.graphics.print("- " .. ability, infoX + 30, infoY + 260 + i * 20)
+    end
+    
+    -- Draw description
+    love.graphics.setFont(smallFont)
+    love.graphics.setColor(COLORS.textDim)
+    love.graphics.printf(unit.description, infoX + 20, infoY + 320, infoWidth - 40, "left")
+    
+    -- Draw buy button
+    local buyButtonWidth = 120
+    local buyButtonHeight = 40
+    local buyButtonX = infoX + (infoWidth - buyButtonWidth) / 2
+    local buyButtonY = infoY + infoHeight - 60
+    
+    if playerCurrency >= unit.cost then
+        love.graphics.setColor(COLORS.button)
+    else
+        love.graphics.setColor(COLORS.buttonDisabled)
+    end
+    love.graphics.rectangle("fill", buyButtonX, buyButtonY, buyButtonWidth, buyButtonHeight)
+    love.graphics.setColor(COLORS.border)
+    love.graphics.rectangle("line", buyButtonX, buyButtonY, buyButtonWidth, buyButtonHeight)
+    
+    love.graphics.setFont(menuFont)
+    love.graphics.setColor(COLORS.text)
+    love.graphics.printf("BUY: " .. unit.cost .. "g", buyButtonX, buyButtonY + 10, buyButtonWidth, "center")
 end
 
 -- Draw items store
@@ -779,7 +881,7 @@ function TeamManagement:drawEquipmentTab(x, y, width, height)
     end
 end
 
--- Draw selected team
+-- Enhanced drawSelectedTeam function with visual feedback
 function TeamManagement:drawSelectedTeam(width, height)
     local panelWidth = 250
     local panelHeight = height - 160
@@ -840,6 +942,14 @@ function TeamManagement:drawSelectedTeam(width, height)
                 love.graphics.setColor(COLORS.gold)
                 love.graphics.rectangle("line", slotX - 2, slotY - 2, slotSize + 4, slotSize + 4, 2)
             end
+            
+            -- Show purchase flash effect if this unit was just bought
+            if self.unitPurchaseFlash and self.flashedUnitIndex == i then
+                -- Calculate flash intensity based on sin wave for pulsing effect
+                local flashIntensity = (math.sin(love.timer.getTime() * 10) + 1) / 2
+                love.graphics.setColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], flashIntensity * 0.7)
+                love.graphics.rectangle("fill", slotX - 5, slotY - 5, slotSize + 10, slotSize + 10)
+            end
         else
             -- Empty slot
             love.graphics.setColor(COLORS.border)
@@ -852,6 +962,13 @@ function TeamManagement:drawSelectedTeam(width, height)
             love.graphics.setColor(COLORS.border)
             love.graphics.printf("+", slotX, slotY + slotSize/2 - 15, slotSize, "center")
         end
+    end
+    
+    -- Display purchase failure message if there is one
+    if self.purchaseFailReason then
+        love.graphics.setFont(menuFont)
+        love.graphics.setColor(COLORS.health)
+        love.graphics.printf(self.purchaseFailReason, panelX, panelY + panelHeight - 40, panelWidth, "center")
     end
 end
 
@@ -884,109 +1001,19 @@ function TeamManagement:drawButtons(width, height)
     love.graphics.printf("START GAME", startX, buttonY + 10, buttonWidth, "center")
 end
 
--- Draw hover information
+
+-- Updated drawHoverInfo function to use selectedStoreUnit
 function TeamManagement:drawHoverInfo(width, height)
-    if currentTab == "units" and hoveredUnit then
-        self:drawUnitHoverInfo(width, height, availableUnits[hoveredUnit])
+    if currentTab == "units" then
+        -- Use selectedStoreUnit for persistent display, fall back to hoveredUnit if nothing is selected
+        if selectedStoreUnit then
+            self:drawUnitHoverInfo(width, height, availableUnits[selectedStoreUnit])
+        elseif hoveredUnit then
+            self:drawUnitHoverInfo(width, height, availableUnits[hoveredUnit])
+        end
     elseif (currentTab == "items" or currentTab == "equipment") and hoveredItem then
         self:drawItemHoverInfo(width, height, availableItems[hoveredItem])
     end
-end
-
--- Draw unit hover info
-function TeamManagement:drawUnitHoverInfo(width, height, unit)
-    local infoWidth = 274
-    local infoHeight = height - 160
-    local infoX = width - infoWidth - 30
-    local infoY = 140
-    
-    -- Draw panel background
-    love.graphics.setColor(COLORS.panel)
-    love.graphics.rectangle("fill", infoX, infoY, infoWidth, infoHeight)
-    love.graphics.setColor(COLORS.border)
-    love.graphics.rectangle("line", infoX, infoY, infoWidth, infoHeight)
-    
-    -- Draw panel title
-    love.graphics.setFont(menuFont)
-    love.graphics.setColor(COLORS.title)
-    love.graphics.printf("UNIT DETAILS", infoX, infoY + 10, infoWidth, "center")
-    
-    -- Draw unit name and type
-    love.graphics.setFont(menuFont)
-    love.graphics.setColor(COLORS.text)
-    love.graphics.print(unit.name, infoX + 20, infoY + 50)
-    
-    love.graphics.setFont(smallFont)
-    love.graphics.setColor(COLORS.textDim)
-    love.graphics.print("Type: " .. unit.type:upper(), infoX + 20, infoY + 80)
-    love.graphics.print("Level: 1", infoX + 20, infoY + 100)
-    
-    -- Draw HP bar
-    local barWidth = infoWidth - 40
-    love.graphics.setColor(COLORS.panel)
-    love.graphics.rectangle("fill", infoX + 20, infoY + 130, barWidth, 20)
-    love.graphics.setColor(COLORS.health)
-    love.graphics.rectangle("fill", infoX + 20, infoY + 130, barWidth, 20)
-    
-    love.graphics.setFont(smallFont)
-    love.graphics.setColor(COLORS.text)
-    love.graphics.print("HP: " .. unit.stats.health .. "/" .. unit.stats.maxHealth, infoX + 25, infoY + 132)
-    
-    -- Draw MP bar
-    love.graphics.setColor(COLORS.panel)
-    love.graphics.rectangle("fill", infoX + 20, infoY + 160, barWidth, 20)
-    love.graphics.setColor(COLORS.mana)
-    love.graphics.rectangle("fill", infoX + 20, infoY + 160, barWidth, 20)
-    
-    love.graphics.setFont(smallFont)
-    love.graphics.setColor(COLORS.text)
-    love.graphics.print("MP: " .. unit.stats.mana .. "/" .. unit.stats.maxMana, infoX + 25, infoY + 162)
-    
-    -- Draw stats
-    love.graphics.setFont(smallFont)
-    
-    love.graphics.setColor(COLORS.attack)
-    love.graphics.print("ATK: " .. unit.stats.attack, infoX + 20, infoY + 190)
-    
-    love.graphics.setColor(COLORS.defense)
-    love.graphics.print("DEF: " .. unit.stats.defense, infoX + 20, infoY + 210)
-    
-    love.graphics.setColor(COLORS.speed)
-    love.graphics.print("SPD: " .. unit.stats.speed, infoX + 20, infoY + 230)
-    
-    -- Draw abilities
-    love.graphics.setFont(smallFont)
-    love.graphics.setColor(COLORS.title)
-    love.graphics.print("ABILITIES:", infoX + 20, infoY + 260)
-    
-    love.graphics.setColor(COLORS.textDim)
-    for i, ability in ipairs(unit.abilities) do
-        love.graphics.print("- " .. ability, infoX + 30, infoY + 260 + i * 20)
-    end
-    
-    -- Draw description
-    love.graphics.setFont(smallFont)
-    love.graphics.setColor(COLORS.textDim)
-    love.graphics.printf(unit.description, infoX + 20, infoY + 320, infoWidth - 40, "left")
-    
-    -- Draw buy button
-    local buyButtonWidth = 120
-    local buyButtonHeight = 40
-    local buyButtonX = infoX + (infoWidth - buyButtonWidth) / 2
-    local buyButtonY = infoY + infoHeight - 60
-    
-    if playerCurrency >= unit.cost then
-        love.graphics.setColor(COLORS.button)
-    else
-        love.graphics.setColor(COLORS.buttonDisabled)
-    end
-    love.graphics.rectangle("fill", buyButtonX, buyButtonY, buyButtonWidth, buyButtonHeight)
-    love.graphics.setColor(COLORS.border)
-    love.graphics.rectangle("line", buyButtonX, buyButtonY, buyButtonWidth, buyButtonHeight)
-    
-    love.graphics.setFont(menuFont)
-    love.graphics.setColor(COLORS.text)
-    love.graphics.printf("BUY: " .. unit.cost .. "g", buyButtonX, buyButtonY + 10, buyButtonWidth, "center")
 end
 
 -- Draw item hover info
@@ -1431,7 +1458,28 @@ function TeamManagement:drawItemDetailPopup(width, height, item)
     love.graphics.print("Close", closeButtonX + 5, closeButtonY + 5)
 end
 
--- Handle mouse press
+-- Update isOverBuyButton to use selectedStoreUnit
+function TeamManagement:isOverBuyButton(x, y)
+    -- If we're not on the units tab or have no unit selected, we can't be over the buy button
+    if currentTab ~= "units" or (not selectedStoreUnit and not hoveredUnit) then 
+        return false 
+    end
+    
+    local infoWidth = 274
+    local infoHeight = love.graphics.getHeight() - 160
+    local infoX = love.graphics.getWidth() - infoWidth - 30
+    local infoY = 140
+    
+    local buyButtonWidth = 120
+    local buyButtonHeight = 40
+    local buyButtonX = infoX + (infoWidth - buyButtonWidth) / 2
+    local buyButtonY = infoY + infoHeight - 60
+    
+    return x >= buyButtonX and x <= buyButtonX + buyButtonWidth and 
+           y >= buyButtonY and y <= buyButtonY + buyButtonHeight
+end
+
+-- Enhanced mousepressed function
 function TeamManagement:mousepressed(x, y, button)
     if button ~= 1 then return end
     
@@ -1445,6 +1493,16 @@ function TeamManagement:mousepressed(x, y, button)
     if showItemDetail then
         self:handleItemDetailPopupClick(x, y)
         return
+    end
+
+    -- Check buy button click - do this early in the function
+    if self:isOverBuyButton(x, y) then
+        -- Use selectedStoreUnit for buying if available, otherwise use hoveredUnit
+        local unitToBuy = selectedStoreUnit or hoveredUnit
+        if unitToBuy then
+            self:buyUnit(unitToBuy)
+            return
+        end
     end
     
     -- Check tab clicks
@@ -1466,6 +1524,8 @@ function TeamManagement:mousepressed(x, y, button)
     local itemsTabX = unitsTabX + tabWidth + tabSpacing
     if x >= itemsTabX and x <= itemsTabX + tabWidth and y >= tabY and y <= tabY + tabHeight then
         currentTab = "items"
+        -- Clear unit selection when switching tabs
+        selectedStoreUnit = nil
         return
     end
     
@@ -1474,6 +1534,8 @@ function TeamManagement:mousepressed(x, y, button)
     if x >= equipTabX and x <= equipTabX + tabWidth and y >= tabY and y <= tabY + tabHeight then
         currentTab = "equipment"
         equipmentSlotSelected = nil
+        -- Clear unit selection when switching tabs
+        selectedStoreUnit = nil
         return
     end
     
@@ -1548,25 +1610,13 @@ function TeamManagement:mousepressed(x, y, button)
         return
     end
     
-    -- Check buy button in unit info panel
-    if currentTab == "units" and hoveredUnit then
-        local infoWidth = 274
-        local infoX = love.graphics.getWidth() - infoWidth - 30
-        local infoY = 140
-        local infoHeight = love.graphics.getHeight() - 160
-        
-        local buyButtonWidth = 120
-        local buyButtonHeight = 40
-        local buyButtonX = infoX + (infoWidth - buyButtonWidth) / 2
-        local buyButtonY = infoY + infoHeight - 60
-        
-        if x >= buyButtonX and x <= buyButtonX + buyButtonWidth and y >= buyButtonY and y <= buyButtonY + buyButtonHeight then
-            self:buyUnit(hoveredUnit)
-            return
-        end
+    -- Check buy button in unit info panel - important fix!
+    if self:isOverBuyButton(x, y) then
+        self:buyUnit(hoveredUnit)
+        return
     end
     
-    -- Check buy button in item info panel
+    -- Check buy button in item info panel 
     if (currentTab == "items" or currentTab == "equipment") and hoveredItem then
         local infoWidth = 274
         local infoX = love.graphics.getWidth() - infoWidth - 30
@@ -1680,7 +1730,7 @@ function TeamManagement:handleItemDetailPopupClick(x, y)
     end
 end
 
--- Handle units store click
+-- Updated handleUnitsStoreClick to set selectedStoreUnit
 function TeamManagement:handleUnitsStoreClick(x, y, contentX, contentY, contentWidth, contentHeight)
     local unitSize = 80
     local cols = 4
@@ -1700,8 +1750,15 @@ function TeamManagement:handleUnitsStoreClick(x, y, contentX, contentY, contentW
                 showUnitDetail = true
                 detailUnit = availableUnits[i]
             else
-                -- Single click selects the unit
-                hoveredUnit = i
+                -- Set the persistent selection
+                if selectedStoreUnit == i then
+                    -- If clicking on already selected unit, deselect it
+                    selectedStoreUnit = nil
+                else
+                    -- Otherwise select the new unit
+                    selectedStoreUnit = i
+                    hoveredUnit = i  -- Also set hoveredUnit for immediate visual feedback
+                end
             end
             
             self.lastClickedStoreUnit = i
@@ -1709,6 +1766,9 @@ function TeamManagement:handleUnitsStoreClick(x, y, contentX, contentY, contentW
             return
         end
     end
+    
+    -- If we click in the store area but not on any unit, keep the selection
+    -- This prevents accidental deselection when clicking in empty space
 end
 
 -- Handle items store click
@@ -1827,108 +1887,108 @@ function TeamManagement:wheelmoved(x, y)
     scrollOffset = math.max(0, math.min(scrollOffset, maxScroll))
 end
 
--- Handle mouse movement
+-- Fix for the TeamManagement:mousemoved function
 function TeamManagement:mousemoved(x, y)
-    -- Reset hover states
+    -- Only track temporary hovering effects with hoveredUnit/hoveredItem
+    -- The persistent selection is tracked by selectedStoreUnit
     hoveredUnit = nil
     hoveredItem = nil
     
-    -- Check units store hover
+    -- Check units store hover for highlighting effect only
     if currentTab == "units" then
         local contentX = 300
         local contentY = 140
         local contentWidth = love.graphics.getWidth() - 600
-        
         local unitSize = 80
         local cols = 4
         local spacing = 20
         local startY = contentY + 50 - scrollOffset
-        
+
         for i, unit in ipairs(availableUnits) do
-            local col = (i-1) % cols
-            local row = math.floor((i-1) / cols)
-            
-            local unitX = contentX + (contentWidth - (cols * unitSize + (cols-1) * spacing)) / 2 + col * (unitSize + spacing)
+            local col = (i - 1) % cols
+            local row = math.floor((i - 1) / cols)
+            local unitX = contentX + (contentWidth - (cols * unitSize + (cols - 1) * spacing)) / 2 + col * (unitSize + spacing)
             local unitY = startY + row * (unitSize + spacing)
-            
-            if x >= unitX and x <= unitX + unitSize and y >= unitY and y <= unitY + unitSize then
-                hoveredUnit = i
-                break
+
+            -- Check if mouse is within the visible area bounds before checking the specific unit
+            if unitY + unitSize >= contentY and unitY <= contentY + (love.graphics.getHeight() - 250) then
+                if x >= unitX and x <= unitX + unitSize and y >= unitY and y <= unitY + unitSize then
+                    hoveredUnit = i
+                    break
+                end
             end
         end
-    end
     
-    -- Check items store hover
-    if currentTab == "items" then
+    -- Similarly check items store hover
+    elseif currentTab == "items" then
         local contentX = 300
         local contentY = 140
         local contentWidth = love.graphics.getWidth() - 600
-        
         local itemSize = 80
         local cols = 4
         local spacing = 20
         local startY = contentY + 50 - scrollOffset
-        
+
         for i, item in ipairs(availableItems) do
             local col = (i-1) % cols
             local row = math.floor((i-1) / cols)
-            
             local itemX = contentX + (contentWidth - (cols * itemSize + (cols-1) * spacing)) / 2 + col * (itemSize + spacing)
             local itemY = startY + row * (itemSize + spacing)
-            
-            if x >= itemX and x <= itemX + itemSize and y >= itemY and y <= itemY + itemSize then
-                hoveredItem = i
-                break
+
+            if itemY + itemSize >= contentY and itemY <= contentY + (love.graphics.getHeight() - 250) then
+                if x >= itemX and x <= itemX + itemSize and y >= itemY and y <= itemY + itemSize then
+                    hoveredItem = i
+                    break
+                end
             end
         end
-    end
     
     -- Check equipment tab hover
-    if currentTab == "equipment" and #selectedUnits > 0 and selectedUnitIndex and selectedUnitIndex <= #selectedUnits then
+    elseif currentTab == "equipment" then
         local contentX = 300
         local contentY = 140
         local contentWidth = love.graphics.getWidth() - 600
         local contentHeight = love.graphics.getHeight() - 250
-        
         local inventoryRect = {x = contentX + 20, y = contentY + 250, width = contentWidth - 40, height = contentHeight - 270}
-        
-        if x >= inventoryRect.x and x <= inventoryRect.x + inventoryRect.width and 
+
+        if x >= inventoryRect.x and x <= inventoryRect.x + inventoryRect.width and
            y >= inventoryRect.y and y <= inventoryRect.y + inventoryRect.height then
-            
+
             local itemSize = 60
             local cols = 6
             local spacing = 10
             local startY = inventoryRect.y + 10 - scrollOffset
-            
-            -- Filter items by equipment type if a slot is selected
             local filteredItems = {}
             local equipTypes = {"weapon", "armor", "accessory"}
-            
-            if equipmentSlotSelected then
-                local slotType = equipTypes[equipmentSlotSelected]
-                for i, item in ipairs(availableItems) do
-                    if item.type == slotType then
-                        table.insert(filteredItems, {index = i, item = item})
+
+            if #selectedUnits > 0 and selectedUnitIndex and selectedUnitIndex <= #selectedUnits then
+                if equipmentSlotSelected then
+                    local slotType = equipTypes[equipmentSlotSelected]
+                    for itemIdx, item in ipairs(availableItems) do
+                        if item.type == slotType then
+                            table.insert(filteredItems, {index = itemIdx, item = item})
+                        end
                     end
-                end
-            else
-                for i, item in ipairs(availableItems) do
-                    if item.type == "weapon" or item.type == "armor" or item.type == "accessory" then
-                        table.insert(filteredItems, {index = i, item = item})
+                else
+                    for itemIdx, item in ipairs(availableItems) do
+                        if item.type == "weapon" or item.type == "armor" or item.type == "accessory" then
+                            table.insert(filteredItems, {index = itemIdx, item = item})
+                        end
                     end
                 end
             end
-            
+
             for i, itemData in ipairs(filteredItems) do
                 local col = (i-1) % cols
                 local row = math.floor((i-1) / cols)
-                
                 local itemX = inventoryRect.x + 10 + col * (itemSize + spacing)
                 local itemY = startY + row * (itemSize + spacing)
-                
-                if x >= itemX and x <= itemX + itemSize and y >= itemY and y <= itemY + itemSize then
-                    hoveredItem = itemData.index
-                    break
+
+                if itemY + itemSize >= inventoryRect.y and itemY <= inventoryRect.y + inventoryRect.height then
+                    if x >= itemX and x <= itemX + itemSize and y >= itemY and y <= itemY + itemSize then
+                        hoveredItem = itemData.index
+                        break
+                    end
                 end
             end
         end
@@ -1987,9 +2047,44 @@ function TeamManagement:removeUnitFromTeam(teamIndex)
     return true
 end
 
--- Buy unit
+-- Update buyUnit function to use selectedStoreUnit
 function TeamManagement:buyUnit(unitIndex)
-    return self:addUnitToTeam(unitIndex)
+    local unitToBuy = unitIndex or selectedStoreUnit
+    if not unitToBuy then return false end
+    
+    local result = self:addUnitToTeam(unitToBuy)
+    
+    if result then
+        -- Optionally play a purchase sound
+        -- if self.game.assets.sounds.purchase then
+        --    love.audio.play(self.game.assets.sounds.purchase)
+        -- end
+        
+        -- Show a visual confirmation
+        local flashTimer = 0.5
+        timer.during(flashTimer, function()
+            self.unitPurchaseFlash = true
+            self.flashedUnitIndex = #selectedUnits
+        end, function()
+            self.unitPurchaseFlash = false
+            self.flashedUnitIndex = nil
+        end)
+        
+        -- Clear selection after successful purchase
+        selectedStoreUnit = nil
+    else
+        -- Show why the purchase failed
+        self.purchaseFailReason = playerCurrency < availableUnits[unitToBuy].cost 
+            and "Not enough gold!" 
+            or "Team is full!"
+        
+        -- Show the error message briefly
+        timer.after(2, function()
+            self.purchaseFailReason = nil
+        end)
+    end
+    
+    return result
 end
 
 -- Buy item

@@ -194,19 +194,22 @@ function UIManager:hideHUD()
     return self
 end
 
--- *** ADD Show/Hide methods for Ability Panel ***
+-- Show ability panel
 function UIManager:showAbilityPanel()
     print("UIManager:showAbilityPanel called") -- Log
     if self.hud then self.hud:showAbilityPanel() end
     return self
 end
 
+-- Hide ability panel
 function UIManager:hideAbilityPanel()
-    print("UIManager:hideAbilityPanel called") -- Log
+    -- *** ADD TRACEBACK LOG ***
+    print("UIManager:hideAbilityPanel called. Traceback:")
+    print(debug.traceback())
+    -- *** END ADD ***
     if self.hud then self.hud:hideAbilityPanel() end
     return self
 end
--- *** END ADDITION ***
 
 -- Handle keypresses
 function UIManager:keypressed(key)

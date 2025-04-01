@@ -220,7 +220,6 @@ function AnimationManager:update(dt)
     -- Update active animations
     local animationsProcessed = 0
     if self.activeAnimations and next(self.activeAnimations) then -- Check if table is not empty
-        print("  Processing " .. self:countActiveAnimations() .. " active animations...") -- Log count
         for id, animation in pairs(self.activeAnimations) do
             animationsProcessed = animationsProcessed + 1
             -- Optional: print(string.format("    Processing animation: %s", id))
@@ -284,14 +283,15 @@ function AnimationManager:draw()
 end
 
 -- Create a movement animation
-function AnimationManager:createMovementAnimation(unit, targetX, targetY, onComplete)
-    print(string.format(">>> AnimationManager:createMovementAnimation - Unit: %s, Target: (%d,%d)", unit.id or "N/A", targetX, targetY)) -- Add this
+function AnimationManager:createMovementAnimation(unit, targetX, targetY, grid, onComplete)
+    if not grid then print("ERROR: createMovementAnimation called without grid!"); return nil end -- Grid is required
 
     -- Don't create new animation if unit is already animating
     if self.animatingUnits[unit] then
         print("  WARNING: Unit is already animating. Aborting new move animation.") -- Add this
         return nil
     end
+    local manager = self
 
     -- Mark unit as animating
     self.animatingUnits[unit] = true
@@ -321,12 +321,13 @@ function AnimationManager:createMovementAnimation(unit, targetX, targetY, onComp
                   movementStyle.duration.landing + movementStyle.duration.settle,
         completed = false,
         direction = direction,
+        grid = grid,
         onComplete = onComplete
     }
     
     -- Store animation
     self.activeAnimations[animId] = animation
-    print(string.format("  Stored animation object with ID: %s", animId)) -- Add this
+    --print(string.format("  Stored animation object with ID: %s", animId)) -- Add this
     
     -- Initialize visual position if not set
     unit.visualX = unit.visualX or unit.x
@@ -345,117 +346,41 @@ function AnimationManager:createMovementAnimation(unit, targetX, targetY, onComp
         direction
     )
     
-    -- 1. Anticipation phase
-    print("  Starting anticipation tween...") -- Add this
-    self.timer:tween(
-        movementStyle.duration.anticipation,
-        unit.scale,
-        {x = movementStyle.squashFactor, y = 2 - movementStyle.squashFactor},
-        'in-out-quad',
-        function() -- onComplete for anticipation tween
-            print("  Anticipation tween COMPLETE.") -- Add this
-            -- 2. Jump phase - stretch and move in arc
-            local jumpDuration = movementStyle.duration.jump
-            local jumpHeight = movementStyle.jumpHeight
-            print(string.format("  Starting jump timer (Duration: %.2f)", jumpDuration)) -- Add this
+    -- Use animation.grid for screen coords
+    local startScreenX, startScreenY = animation.grid:gridToScreen(unit.visualX, unit.visualY)
+    startScreenX = startScreenX + animation.grid.tileSize/2; startScreenY = startScreenY + animation.grid.tileSize/2
+    manager:createParticles("movementStart", startScreenX, startScreenY, direction)
 
-            self.timer:during(
-                jumpDuration,
-                -- Corrected callback signature (only dt, timeLeft)
-                function(dt, timeLeft)
-                    -- Calculate progress using jumpDuration (which is in the outer scope)
-                    -- Ensure jumpDuration is not zero to avoid division errors
-                    local progress
-                    if jumpDuration > 0 then
-                        progress = 1 - (timeLeft / jumpDuration)
-                    else
-                        progress = 1 -- If duration is 0, animation is instantly complete
-                    end
-                    -- Clamp progress to handle potential floating point inaccuracies near the end
-                    progress = math.max(0, math.min(1, progress))
-
-                    print(string.format("    Jump Anim %s - Progress: %.2f (timeLeft: %.4f)", animId, progress, timeLeft)) -- Updated log
-
-                    -- Use 'animation' table (from outer scope) for start/target coords
-                    local currentVisualX = animation.startX + (animation.targetX - animation.startX) * progress
-                    local currentVisualY = animation.startY + (animation.targetY - animation.startY) * progress
-
-                    -- Use 'jumpHeight' (from outer scope) for arc
-                    local arcOffset = -jumpHeight * math.sin(progress * math.pi)
-
-                    -- Update unit's visual properties (use 'unit' from outer scope)
-                    unit.visualX = currentVisualX
-                    unit.visualY = currentVisualY
-                    unit.offset.y = arcOffset
-
-                    print(string.format("      Updated Visuals - X: %.2f, Y: %.2f, OffsetY: %.2f", unit.visualX, unit.visualY, unit.offset.y))
-
-                    -- Use 'movementStyle' (from outer scope) for stretch
-                    local stretchProgress = math.sin(progress * math.pi)
-                    local stretchFactor = 1 + (movementStyle.stretchFactor - 1) * stretchProgress
-                    unit.scale.x = 2 - stretchFactor
-                    unit.scale.y = stretchFactor
-
-                    -- Create trail particles (use 'self' from outer scope to call method)
-                    if math.random() < 0.3 then
-                        self:createParticles( -- Use self:
-                            "movementTrail",
-                            unit.visualX,
-                            unit.visualY + unit.offset.y, -- Use offset visual Y for particle origin
-                            animation.direction - math.pi -- Use direction from animation table
-                        )
-                    end
-                end,
-                function() -- onComplete callback for 'during'
-                    print(string.format("  Jump timer COMPLETE for anim %s.", animId))
-                    -- Reset visual position to final logical position
-                    unit.visualX = animation.targetX
-                    unit.visualY = animation.targetY
-                    unit.offset.y = 0 -- Important: Reset offset after jump
-
-                    -- Create landing particles
-                    self:createParticles( -- Use self:
-                        "landing",
-                        animation.targetX, -- Use target from animation table
-                        animation.targetY,
-                        0 -- All directions
-                    )
-
-                    -- 3. Landing phase
-                    print("    Starting landing tween...")
-                    self.timer:tween( -- Use self.timer
-                        movementStyle.duration.landing,
-                        unit.scale,
-                        {x = movementStyle.stretchFactor, y = movementStyle.squashFactor},
-                        'out-quad',
-                        function()
-                            print("    Landing tween COMPLETE.")
-                            -- 4. Settle phase
-                            -- ... (rest of settle logic, ensure it uses self.timer) ...
-                                -- Final return to normal
-                                print("    Starting final settle tween...")
-                                self.timer:tween( -- Use self.timer
-                                    movementStyle.duration.settle * 0.5,
-                                    unit.scale,
-                                    {x = 1, y = 1},
-                                    'in-out-quad',
-                                    function()
-                                        print(string.format("  Settle tween COMPLETE. Marking animation %s as completed.", animId))
-                                        animation.completed = true
-                                        if animation.onComplete then
-                                            print("    Calling original onComplete callback.")
-                                            animation.onComplete()
-                                        end
-                                    end
-                                )
-                            -- ...
-                        end
-                    )
-                end
-            )
-        end
-    )
-    print("<<< AnimationManager:createMovementAnimation - Returning animId: " .. animId) -- Add this
+    -- Animation sequence using timer
+    manager.timer:tween(movementStyle.duration.anticipation, unit.scale, {x = movementStyle.squashFactor, y = 2 - movementStyle.squashFactor}, 'in-out-quad', function()
+        local jumpDuration = movementStyle.duration.jump; local jumpHeight = movementStyle.jumpHeight
+        manager.timer:during(jumpDuration, function(dt, timeLeft)
+            local progress = 0; if jumpDuration > 0 then progress = 1 - (timeLeft / jumpDuration); progress = math.max(0, math.min(1, progress)) else progress = 1 end
+            unit.visualX = animation.startX + (animation.targetX - animation.startX) * progress
+            unit.visualY = animation.startY + (animation.targetY - animation.startY) * progress
+            local arcOffset = -jumpHeight * math.sin(progress * math.pi); unit.offset.y = arcOffset
+            local stretchProgress = math.sin(progress * math.pi); local stretchFactor = 1 + (movementStyle.stretchFactor - 1) * stretchProgress
+            unit.scale.x = 2 - stretchFactor; unit.scale.y = stretchFactor
+            if math.random() < 0.3 then
+                -- Use animation.grid for screen coords
+                local px, py = animation.grid:gridToScreen(unit.visualX, unit.visualY)
+                px = px + animation.grid.tileSize/2; py = py + animation.grid.tileSize/2 + unit.offset.y -- Add offset for trail
+                manager:createParticles("movementTrail", px, py, animation.direction - math.pi)
+            end
+        end, function() -- onComplete for jump phase
+            unit.visualX = animation.targetX; unit.visualY = animation.targetY; unit.offset.y = 0
+            -- Use animation.grid for screen coords
+            local landScreenX, landScreenY = animation.grid:gridToScreen(animation.targetX, animation.targetY)
+            landScreenX = landScreenX + animation.grid.tileSize/2; landScreenY = landScreenY + animation.grid.tileSize/2
+            manager:createParticles("landing", landScreenX, landScreenY, 0)
+            manager.timer:tween(movementStyle.duration.landing, unit.scale, {x = movementStyle.stretchFactor, y = movementStyle.squashFactor}, 'out-quad', function()
+                manager.timer:tween(movementStyle.duration.settle * 0.5, unit.scale, {x = 1, y = 1}, 'in-out-quad', function()
+                    unit.visualX = unit.x; unit.visualY = unit.y; unit.offset = {x = 0, y = 0}; unit.scale = {x = 1, y = 1}; unit.rotation = 0; animation.completed = true
+                    if animation.onComplete then animation.onComplete() end
+                end)
+            end)
+        end)
+    end)
     return animId
 end
 
